@@ -1,0 +1,163 @@
+import {
+  describe,
+  expect,
+  it,
+  vi,
+} from 'vitest';
+import {
+  create,
+  defineCommand,
+  User,
+  type Message,
+} from '@/index.js';
+import { FakeProvider } from './fake-provider.js';
+
+const message: Message = {
+  id: 'message-1',
+  jid: '123@g.us',
+  chatId: '123@g.us',
+  senderId: '5511999999999@s.whatsapp.net',
+  senderIds: ['5511999999999@s.whatsapp.net'],
+  sender: User.fromIdentities(['5511999999999@s.whatsapp.net']),
+  keys: { id: 'message-1', chatId: '123@g.us', fromMe: false },
+  text: '!fechar',
+  mentions: [],
+  mentionedUsers: [],
+  timestamp: new Date(),
+  isGroup: true,
+  isReply: false,
+  isViewOnce: false,
+  hasMedia: false,
+};
+
+describe('WhaNextApp', () => {
+  it('delivers the pairing code and completes login', async () => {
+    const provider = new FakeProvider();
+    const app = await create({ provider, phone: '5511999999999' });
+    const onCode = vi.fn();
+
+    await app.login({ onCode });
+
+    expect(onCode).toHaveBeenCalledWith('1234-5678');
+    expect(app.state).toBe('connected');
+  });
+
+  it('provides a production health snapshot', async () => {
+    const provider = new FakeProvider();
+    const app = await create({ provider, logger: 'silent' });
+
+    expect(app.health()).toMatchObject({
+      status: 'idle',
+      state: 'idle',
+      ready: false,
+      muteEnabled: false,
+      logLevel: 'silent',
+    });
+
+    await app.login();
+
+    expect(app.isReady).toBe(true);
+    expect(app.health()).toMatchObject({
+      status: 'ready',
+      state: 'connected',
+      ready: true,
+    });
+    expect(app.health().uptimeMs).toBeGreaterThanOrEqual(0);
+  });
+
+  it('dispatches normalized messages to registered commands', async () => {
+    const provider = new FakeProvider();
+    const app = await create({ provider });
+    const execute = vi.fn();
+    app.router().command(defineCommand({
+      name: 'fechar',
+      description: 'Fecha o grupo.',
+      onlyGroup: true,
+      onlyAdmin: true,
+      execute,
+    }));
+
+    await provider.events.emit('message', message);
+
+    expect(execute).toHaveBeenCalledOnce();
+  });
+
+  it('recognizes an administrator received through a device LID', async () => {
+    const provider = new FakeProvider();
+    const app = await create({ provider });
+    const execute = vi.fn();
+    app.router().command(defineCommand({
+      name: 'abrir',
+      description: 'Abre o grupo.',
+      onlyGroup: true,
+      onlyAdmin: true,
+      execute,
+    }));
+
+    await provider.events.emit('message', {
+      ...message,
+      text: '!abrir',
+      senderId: '100000000000001:5@lid',
+      senderIds: ['100000000000001:5@lid'],
+      sender: User.fromIdentities(['100000000000001:5@lid']),
+    });
+
+    expect(execute).toHaveBeenCalledOnce();
+  });
+
+  it('uses the prefix defined once during app creation', async () => {
+    const provider = new FakeProvider();
+    const app = await create({ provider, prefix: '#' });
+    const execute = vi.fn();
+    app.router().command(defineCommand({
+      name: 'fechar',
+      description: 'Fecha o grupo.',
+      execute,
+    }));
+
+    await provider.events.emit('message', { ...message, text: '#fechar' });
+    await provider.events.emit('message', { ...message, text: '!fechar' });
+
+    expect(execute).toHaveBeenCalledOnce();
+  });
+
+  it('sends replies with the original message key', async () => {
+    const provider = new FakeProvider();
+    const app = await create({ provider });
+
+    await app.message.reply(message, { text: 'Pronto.' });
+
+    expect(provider.sent[0]).toMatchObject({ chatId: '123@g.us', replyTo: message.keys });
+  });
+
+  it('deletes a message through the normalized message API', async () => {
+    const provider = new FakeProvider();
+    const app = await create({ provider });
+
+    await app.message.delete(message);
+
+    expect(provider.deleted).toEqual([message.keys]);
+  });
+
+  it('blocks group mutations when the connected account is not an admin', async () => {
+    const provider = new FakeProvider();
+    provider.currentUserIds = ['5511000000000@s.whatsapp.net'];
+    const app = await create({ provider });
+    const execute = vi.fn();
+    const onError = vi.fn();
+    app.on('error', onError);
+    app.router().command(defineCommand({
+      name: 'fechar',
+      description: 'Fecha o grupo.',
+      onlyGroup: true,
+      onlyAdmin: true,
+      botMustBeAdmin: true,
+      execute,
+    }));
+
+    await provider.events.emit('message', message);
+
+    expect(execute).not.toHaveBeenCalled();
+    expect(onError).toHaveBeenCalledWith(expect.objectContaining({ code: 'BOT_NOT_ADMIN' }));
+  });
+});

@@ -1,0 +1,12 @@
+node_modules
+dist
+coverage
+data
+.env
+session
+*.log
+*.tgz
+*.zip
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal

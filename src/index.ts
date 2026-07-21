@@ -22,6 +22,12 @@ export {
   type CommandDefinition,
 } from '@/commands/command.js';
 export {
+  loadCommands,
+  type CommandRegistrar,
+  type LoadCommandsOptions,
+  type LoadCommandsResult,
+} from '@/commands/load-commands.js';
+export {
   CommandRouter,
   type RouterOptions,
 } from '@/commands/router.js';

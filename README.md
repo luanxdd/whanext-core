@@ -407,6 +407,37 @@ Restrições disponíveis:
 
 `ArgsParser` possui `string`, `number`, `boolean`, `enum`, `user`, `duration`, `peek`, `skip` e `rest`. `args.user()` retorna `User`, nunca uma string crua.
 
+### Carregando comandos de uma pasta
+
+`loadCommands` importa e registra todos os comandos de um diretório, sem precisar listar cada arquivo manualmente:
+
+```ts
+import { loadCommands } from '@whanext/core';
+
+await loadCommands(app.router(), './commands');
+```
+
+Cada arquivo deve exportar um `CommandDefinition`, por padrão ou nomeado:
+
+```ts
+// commands/ping.js
+export default defineCommand({
+  name: 'ping',
+  description: 'Responde pong.',
+  async execute(message) {
+    await app.message.reply(message, 'pong');
+  },
+});
+```
+
+Por padrão, `loadCommands` procura arquivos `.js`, `.mjs` e `.cjs`, incluindo subpastas. Extensões como `.ts` não são carregadas por padrão, já que o `import()` dinâmico depende de um loader do TypeScript já estar ativo no processo (`tsx`, `ts-node` ou similar); habilite explicitamente quando esse loader existir:
+
+```ts
+await loadCommands(app.router(), './commands', { extensions: ['.ts'] });
+```
+
+`loadCommands` também aceita qualquer objeto com um método `command()`, não apenas o router retornado por `app.router()`.
+
 ## Cache externo
 
 ```ts
@@ -467,6 +498,7 @@ Todos os erros públicos usam `WhaNextError` e códigos estáveis. O logger regi
 | `app.chat` | Indicadores de presença e rejeição de chamadas |
 | `app.logger` | Logging e nível em execução |
 | `app.router()` | Registro e despacho de comandos |
+| `loadCommands()` | Autoload de comandos a partir de uma pasta |
 | `app.health()` | Snapshot de saúde da aplicação |
 
 ## Exemplo executável

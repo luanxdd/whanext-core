@@ -10,6 +10,8 @@ Todas as mudanças relevantes do projeto serão registradas neste arquivo.
 - Modelo `CallEvent` normalizado, exportado pelo pacote. Status desconhecidos vindos do provider são normalizados para `timeout`.
 - `app.chat.rejectCall(callId, from)` para rejeitar chamadas de voz e vídeo.
 - Suporte ao evento `call` do Baileys no `BaileysProvider`.
+- `loadCommands(registrar, dirPath, options?)` para registrar comandos automaticamente a partir de uma pasta e suas subpastas, sem importação manual arquivo por arquivo.
+- Código de erro `COMMAND_LOAD_FAILED` para falhas de leitura de diretório, importação ou export inválido em `loadCommands`.
 
 ## 0.3.0
 

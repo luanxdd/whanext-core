@@ -1,4 +1,4 @@
-# WhaNext — Especificação v0.4
+# WhaNext — Especificação v0.5
 
 ## 1. Visão
 
@@ -11,7 +11,7 @@ Baileys é o provider inicial e substituível. Ele permanece restrito ao adaptad
 - Login, pairing code e reconexão sem lógica de socket no consumidor.
 - Mensagens, usuários e identidades normalizados.
 - Operações de grupos e membros idempotentes.
-- Comandos declarativos com prefixo, autorização e argumentos tipados.
+- Comandos declarativos com prefixo, autorização e argumentos tipados, com autoload opcional a partir de uma pasta.
 - Cache de metadados transparente.
 - Mute persistente aplicado antes da lógica do bot.
 - Chamadas de voz e vídeo normalizadas, com rejeição sem lógica de socket no consumidor.
@@ -32,6 +32,7 @@ Baileys é o provider inicial e substituível. Ele permanece restrito ao adaptad
 | `app.chat` | Presença e chamadas | `typing`, `recording`, `stop`, `stopTyping`, `rejectCall` |
 | `app.logger` | Logging público | `debug`, `info`, `warn`, `error`, `child`, `setLevel` |
 | `app.router()` | Comandos | `command`, `dispatch` |
+| `loadCommands()` | Autoload de comandos | função solta, não pertence ao `app` |
 | `app.health()` | Saúde da aplicação | snapshot síncrono |
 | `app.on` | Eventos | `message`, `connection`, `error`, `mute`, `call` |
 
@@ -226,6 +227,27 @@ Para cada mensagem recebida:
 
 Restrições: `onlyGroup`, `onlyPrivate`, `onlyAdmin` e `botMustBeAdmin`.
 
+### 11.1 Autoload
+
+`loadCommands(registrar, dirPath, options?)` é uma função solta, independente do `CommandRouter`. Ela não pertence à classe do router porque resolve um problema diferente do dele: descoberta de arquivos no disco, não roteamento de mensagens.
+
+```ts
+interface CommandRegistrar {
+  command(definition: CommandDefinition): unknown;
+}
+
+interface LoadCommandsOptions {
+  extensions?: readonly string[];
+  recursive?: boolean;
+}
+```
+
+`registrar` aceita qualquer objeto com um método `command()`, incluindo `CommandRouter` e mocks de teste. Isso mantém `loadCommands` desacoplado do restante do app.
+
+Por padrão, `loadCommands` varre `dirPath` recursivamente e importa somente arquivos `.js`, `.mjs` e `.cjs`. Arquivos `.ts` não entram no conjunto padrão: a função usa `import()` dinâmico, que depende de um loader de TypeScript já ativo no processo (`tsx`, `ts-node`, `--experimental-strip-types`); sem ele, o erro resultante é obscuro e não identificado como "TypeScript não suportado". A lib não assume que esse loader existe; o consumidor habilita `.ts` explicitamente via `options.extensions` quando aplicável.
+
+Cada arquivo deve exportar um `CommandDefinition`, como export padrão ou como o primeiro export nomeado. Um arquivo que não exporta um comando válido, ou que falha ao importar, lança `WhaNextError` com código `COMMAND_LOAD_FAILED`.
+
 ## 12. Cache
 
 O cache padrão pertence à instância do app. Metadados possuem TTL, eventos de grupo invalidam entradas e mutações invalidam o grupo depois do sucesso. Um `CacheStore` externo pode implementar armazenamento distribuído.
@@ -273,11 +295,10 @@ Publicação ocorre por GitHub Release e usa trusted publishing OIDC, permissão
 
 `repository.url` aponta para `github.com/luanxdd/whanext-core` e corresponde ao repositório que executa a publicação.
 
-## 16. Critérios de aceite v0.4
+## 16. Critérios de aceite v0.5
 
-- `app.on('call', ...)` recebe o evento normalizado emitido pelo provider.
-- `app.chat.rejectCall()` delega corretamente ao provider ativo.
-- Tipos do Baileys (`WACallEvent`) não vazam para `dist/index.d.ts`.
-- README documenta o evento `call` e `app.chat.rejectCall`.
-- Testes cobrem emissão do evento e rejeição de chamada via `FakeProvider`.
-- Critérios de aceite da v0.3 permanecem válidos.
+- `loadCommands()` registra comandos exportados por padrão ou por nome, a partir de uma pasta e suas subpastas.
+- `loadCommands()` ignora arquivos `.ts` por padrão e os carrega apenas quando `options.extensions` inclui essa extensão.
+- `loadCommands()` lança `WhaNextError` com código `COMMAND_LOAD_FAILED` para diretório inexistente, falha de importação ou arquivo sem export válido.
+- `CommandRouter` permanece responsável apenas por registro e despacho; nenhuma lógica de sistema de arquivos foi adicionada a ele.
+- Critérios de aceite da v0.4 permanecem válidos.

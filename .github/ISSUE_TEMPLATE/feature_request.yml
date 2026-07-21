@@ -1,0 +1,27 @@
+name: Feature request
+description: Sugira uma evolução para a API pública.
+title: "[Feature]: "
+labels:
+  - enhancement
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problema
+      description: Qual necessidade esta proposta resolve?
+    validations:
+      required: true
+
+  - type: textarea
+    id: api
+    attributes:
+      label: API sugerida
+      description: Mostre como você gostaria de usar a funcionalidade.
+      render: ts
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternativas consideradas

@@ -19,11 +19,13 @@ export type {
 export { ArgsParser } from '@/commands/args-parser.js';
 export {
   defineCommand,
+  defineCommands,
   type CommandDefinition,
 } from '@/commands/command.js';
 export {
   loadCommands,
   type CommandRegistrar,
+  type LoadedCommand,
   type LoadCommandsOptions,
   type LoadCommandsResult,
 } from '@/commands/load-commands.js';

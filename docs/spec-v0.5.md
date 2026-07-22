@@ -1,4 +1,4 @@
-# WhaNext — Especificação v0.5
+# WhaNext — Especificação v0.5.1
 
 ## 1. Visão
 
@@ -240,13 +240,43 @@ interface LoadCommandsOptions {
   extensions?: readonly string[];
   recursive?: boolean;
 }
+
+interface LoadedCommand {
+  name: string;
+  filePath: string;
+}
+
+interface LoadCommandsResult {
+  loaded: readonly string[];
+  skipped: readonly string[];
+  commands: readonly LoadedCommand[];
+}
 ```
 
 `registrar` aceita qualquer objeto com um método `command()`, incluindo `CommandRouter` e mocks de teste. Isso mantém `loadCommands` desacoplado do restante do app.
 
 Por padrão, `loadCommands` varre `dirPath` recursivamente e importa somente arquivos `.js`, `.mjs` e `.cjs`. Arquivos `.ts` não entram no conjunto padrão: a função usa `import()` dinâmico, que depende de um loader de TypeScript já ativo no processo (`tsx`, `ts-node`, `--experimental-strip-types`); sem ele, o erro resultante é obscuro e não identificado como "TypeScript não suportado". A lib não assume que esse loader existe; o consumidor habilita `.ts` explicitamente via `options.extensions` quando aplicável.
 
-Cada arquivo deve exportar um `CommandDefinition`, como export padrão ou como o primeiro export nomeado. Um arquivo que não exporta um comando válido, ou que falha ao importar, lança `WhaNextError` com código `COMMAND_LOAD_FAILED`.
+Cada arquivo pode exportar um ou vários `CommandDefinition`. O loader percorre o export padrão e todos os exports nomeados, aceitando tanto comandos individuais quanto coleções de comandos. Valores auxiliares são ignorados, e referências repetidas ao mesmo objeto são registradas uma única vez.
+
+Para módulos com múltiplos comandos, `defineCommands(...commands)` oferece a forma declarativa recomendada e preserva a inferência dos tipos específicos de cada item:
+
+```ts
+export default defineCommands(
+  defineCommand({
+    name: 'mute',
+    description: 'Silencia um membro.',
+    async execute(message, args) { /* ... */ },
+  }),
+  defineCommand({
+    name: 'unmute',
+    description: 'Remove o silêncio de um membro.',
+    async execute(message, args) { /* ... */ },
+  }),
+);
+```
+
+Como alternativa, cada comando pode ser um export nomeado. Um arquivo que não exporta nenhum comando válido, ou que falha ao importar, lança `WhaNextError` com código `COMMAND_LOAD_FAILED`.
 
 ## 12. Cache
 
@@ -297,7 +327,8 @@ Publicação ocorre por GitHub Release e usa trusted publishing OIDC, permissão
 
 ## 16. Critérios de aceite v0.5
 
-- `loadCommands()` registra comandos exportados por padrão ou por nome, a partir de uma pasta e suas subpastas.
+- `loadCommands()` registra todos os comandos exportados por padrão ou por nome, incluindo coleções e múltiplos comandos no mesmo arquivo.
+- `defineCommands()` declara coleções de comandos com inferência de tipos e sem exigir um arquivo por comando.
 - `loadCommands()` ignora arquivos `.ts` por padrão e os carrega apenas quando `options.extensions` inclui essa extensão.
 - `loadCommands()` lança `WhaNextError` com código `COMMAND_LOAD_FAILED` para diretório inexistente, falha de importação ou arquivo sem export válido.
 - `CommandRouter` permanece responsável apenas por registro e despacho; nenhuma lógica de sistema de arquivos foi adicionada a ele.

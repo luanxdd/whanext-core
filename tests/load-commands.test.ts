@@ -59,6 +59,73 @@ describe('loadCommands', () => {
     expect(registrar.registered.map((command) => command.name)).toEqual(['ban']);
   });
 
+  it('registers every named command exported by the same file', async () => {
+    await writeFile(
+      path.join(dir, 'moderation.mjs'),
+      [
+        "export const mute = { name: 'mute', description: 'mute', execute: () => {} };",
+        "export const unmute = { name: 'unmute', description: 'unmute', execute: () => {} };",
+      ].join('\n'),
+    );
+
+    const registrar = new FakeRegistrar();
+    const result = await loadCommands(registrar, dir);
+
+    expect(registrar.registered.map((command) => command.name)).toEqual(['mute', 'unmute']);
+    expect(result.loaded).toEqual([path.join(dir, 'moderation.mjs')]);
+    expect(result.commands).toEqual([
+      { name: 'mute', filePath: path.join(dir, 'moderation.mjs') },
+      { name: 'unmute', filePath: path.join(dir, 'moderation.mjs') },
+    ]);
+  });
+
+  it('registers a default-exported command collection', async () => {
+    await writeFile(
+      path.join(dir, 'moderation.mjs'),
+      [
+        "const mute = { name: 'mute', description: 'mute', execute: () => {} };",
+        "const unmute = { name: 'unmute', description: 'unmute', execute: () => {} };",
+        'export default [mute, unmute];',
+      ].join('\n'),
+    );
+
+    const registrar = new FakeRegistrar();
+    await loadCommands(registrar, dir);
+
+    expect(registrar.registered.map((command) => command.name)).toEqual(['mute', 'unmute']);
+  });
+
+  it('ignores auxiliary exports when the file contains commands', async () => {
+    await writeFile(
+      path.join(dir, 'ping.mjs'),
+      [
+        "export const metadata = { category: 'utility' };",
+        "export const ping = { name: 'ping', description: 'ping', execute: () => {} };",
+      ].join('\n'),
+    );
+
+    const registrar = new FakeRegistrar();
+    await loadCommands(registrar, dir);
+
+    expect(registrar.registered.map((command) => command.name)).toEqual(['ping']);
+  });
+
+  it('does not register the same command twice when it is re-exported', async () => {
+    await writeFile(
+      path.join(dir, 'ping.mjs'),
+      [
+        "const ping = { name: 'ping', description: 'ping', execute: () => {} };",
+        'export { ping };',
+        'export default [ping];',
+      ].join('\n'),
+    );
+
+    const registrar = new FakeRegistrar();
+    await loadCommands(registrar, dir);
+
+    expect(registrar.registered.map((command) => command.name)).toEqual(['ping']);
+  });
+
   it('loads commands from nested directories by default', async () => {
     await mkdir(path.join(dir, 'moderation'));
     await writeFile(

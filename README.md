@@ -409,7 +409,7 @@ Restrições disponíveis:
 
 ### Carregando comandos de uma pasta
 
-`loadCommands` importa e registra todos os comandos de um diretório, sem precisar listar cada arquivo manualmente:
+`loadCommands` importa e registra todos os comandos de um diretório, sem precisar listar cada arquivo manualmente. Um arquivo pode conter um ou vários comandos:
 
 ```ts
 import { loadCommands } from '@whanext/core';
@@ -417,7 +417,7 @@ import { loadCommands } from '@whanext/core';
 await loadCommands(app.router(), './commands');
 ```
 
-Cada arquivo deve exportar um `CommandDefinition`, por padrão ou nomeado:
+Para um comando por arquivo, continue usando `defineCommand` normalmente:
 
 ```ts
 // commands/ping.js
@@ -430,6 +430,40 @@ export default defineCommand({
 });
 ```
 
+Para manter comandos relacionados juntos, use `defineCommands`. Esse é o formato recomendado para módulos com vários comandos:
+
+```ts
+// commands/moderation.ts
+import { defineCommand, defineCommands } from '@whanext/core';
+
+const mute = defineCommand({
+  name: 'mute',
+  description: 'Silencia um membro.',
+  async execute(message, args) {
+    // ...
+  },
+});
+
+const unmute = defineCommand({
+  name: 'unmute',
+  description: 'Remove o silêncio de um membro.',
+  async execute(message, args) {
+    // ...
+  },
+});
+
+export default defineCommands(mute, unmute);
+```
+
+Vários exports nomeados também são descobertos automaticamente:
+
+```ts
+export const mute = defineCommand({ /* ... */ });
+export const unmute = defineCommand({ /* ... */ });
+```
+
+Exports auxiliares, como constantes e metadados, são ignorados quando o módulo contém ao menos um comando válido. Se o mesmo objeto de comando aparecer em uma coleção e em um export nomeado, ele será registrado apenas uma vez.
+
 Por padrão, `loadCommands` procura arquivos `.js`, `.mjs` e `.cjs`, incluindo subpastas. Extensões como `.ts` não são carregadas por padrão, já que o `import()` dinâmico depende de um loader do TypeScript já estar ativo no processo (`tsx`, `ts-node` ou similar); habilite explicitamente quando esse loader existir:
 
 ```ts
@@ -437,6 +471,16 @@ await loadCommands(app.router(), './commands', { extensions: ['.ts'] });
 ```
 
 `loadCommands` também aceita qualquer objeto com um método `command()`, não apenas o router retornado por `app.router()`.
+
+O retorno informa os arquivos carregados e ignorados, além de cada comando registrado:
+
+```ts
+const result = await loadCommands(app.router(), './commands');
+
+console.log(result.loaded);   // arquivos importados
+console.log(result.skipped);  // extensões não habilitadas
+console.log(result.commands); // { name, filePath }[]
+```
 
 ## Cache externo
 

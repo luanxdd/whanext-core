@@ -2,6 +2,24 @@
 
 Todas as mudanças relevantes do projeto serão registradas neste arquivo.
 
+## 0.5.1
+
+### Adicionado
+
+- `defineCommands(...commands)` para declarar vários comandos no mesmo módulo com inferência completa de tipos.
+- `LoadCommandsResult.commands`, com o nome e o arquivo de origem de cada comando registrado.
+
+### Alterado
+
+- `loadCommands()` agora descobre todos os comandos exportados por um arquivo, incluindo vários exports nomeados e coleções exportadas por padrão.
+- Exports auxiliares são ignorados quando o módulo possui comandos válidos.
+- O mesmo objeto de comando não é registrado duas vezes quando aparece em mais de um export.
+- A ordem de descoberta dos arquivos agora é determinística.
+
+### Corrigido
+
+- Corrigido o autoload que registrava apenas o primeiro comando de arquivos como `mute/unmute`.
+
 ## 0.5.0
 
 ### Adicionado

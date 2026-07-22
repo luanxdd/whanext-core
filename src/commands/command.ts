@@ -15,3 +15,9 @@ export interface CommandDefinition {
 export function defineCommand<const Command extends CommandDefinition>(command: Command): Command {
   return command;
 }
+
+export function defineCommands<const Commands extends readonly CommandDefinition[]>(
+  ...commands: Commands
+): Commands {
+  return commands;
+}

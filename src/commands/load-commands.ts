@@ -18,6 +18,12 @@ export interface LoadCommandsOptions {
 export interface LoadCommandsResult {
   loaded: readonly string[];
   skipped: readonly string[];
+  commands: readonly LoadedCommand[];
+}
+
+export interface LoadedCommand {
+  name: string;
+  filePath: string;
 }
 
 const DEFAULT_EXTENSIONS = ['.js', '.mjs', '.cjs'] as const;
@@ -33,6 +39,7 @@ export async function loadCommands(
   const entries = await readEntries(dirPath, recursive);
   const loaded: string[] = [];
   const skipped: string[] = [];
+  const commands: LoadedCommand[] = [];
 
   for (const filePath of entries) {
     if (!extensions.includes(path.extname(filePath))) {
@@ -40,12 +47,17 @@ export async function loadCommands(
       continue;
     }
 
-    const definition = await importCommand(filePath);
-    registrar.command(definition);
+    const definitions = await importCommands(filePath);
+
+    for (const definition of definitions) {
+      registrar.command(definition);
+      commands.push({ name: definition.name, filePath });
+    }
+
     loaded.push(filePath);
   }
 
-  return { loaded, skipped };
+  return { loaded, skipped, commands };
 }
 
 async function readEntries(dirPath: string, recursive: boolean): Promise<string[]> {
@@ -62,10 +74,11 @@ async function readEntries(dirPath: string, recursive: boolean): Promise<string[
 
   return dirents
     .filter((dirent) => dirent.isFile())
-    .map((dirent) => path.join(dirent.parentPath, dirent.name));
+    .map((dirent) => path.join(dirent.parentPath, dirent.name))
+    .sort((left, right) => left.localeCompare(right));
 }
 
-async function importCommand(filePath: string): Promise<CommandDefinition> {
+async function importCommands(filePath: string): Promise<CommandDefinition[]> {
   let module: Record<string, unknown>;
 
   try {
@@ -77,15 +90,33 @@ async function importCommand(filePath: string): Promise<CommandDefinition> {
     });
   }
 
-  const candidate = module.default ?? Object.values(module)[0];
+  const definitions: CommandDefinition[] = [];
+  const seen = new Set<CommandDefinition>();
+  const exports = [
+    module.default,
+    ...Object.entries(module)
+      .filter(([name]) => name !== 'default')
+      .map(([, value]) => value),
+  ];
 
-  if (!isCommandDefinition(candidate)) {
-    throw new WhaNextError('COMMAND_LOAD_FAILED', `The file "${filePath}" does not export a valid command.`, {
+  for (const value of exports) {
+    const candidates = Array.isArray(value) ? value : [value];
+
+    for (const candidate of candidates) {
+      if (isCommandDefinition(candidate) && !seen.has(candidate)) {
+        seen.add(candidate);
+        definitions.push(candidate);
+      }
+    }
+  }
+
+  if (definitions.length === 0) {
+    throw new WhaNextError('COMMAND_LOAD_FAILED', `The file "${filePath}" does not export any valid commands.`, {
       context: { filePath },
     });
   }
 
-  return candidate;
+  return definitions;
 }
 
 function isCommandDefinition(value: unknown): value is CommandDefinition {

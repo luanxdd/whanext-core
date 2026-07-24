@@ -154,6 +154,18 @@ describe('WhaNextApp', () => {
     expect(provider.downloadedMedia).toEqual([message.keys]);
   });
 
+  it('sends stickers through the media API', async () => {
+    const provider = new FakeProvider();
+    const app = await create({ provider });
+    const sticker = new Uint8Array([1, 2, 3]);
+
+    await app.media.sticker('123@g.us', { sticker });
+
+    expect(provider.sent).toEqual([
+      { chatId: '123@g.us', content: { sticker } },
+    ]);
+  });
+
   it('adds and removes reactions through the normalized message API', async () => {
     const provider = new FakeProvider();
     const app = await create({ provider });

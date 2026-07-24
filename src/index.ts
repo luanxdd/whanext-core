@@ -77,6 +77,7 @@ export type {
   MessageMedia,
   QuotedMessage,
   SentMessage,
+  StickerContent,
   TextContent,
   VideoContent,
 } from '@/models/message.js';

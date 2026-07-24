@@ -509,6 +509,10 @@ export class BaileysProvider implements WhatsAppProvider {
       };
     }
 
+    if ('sticker' in content) {
+      return { sticker: this.#media(content.sticker) };
+    }
+
     return {
       audio: this.#media(content.audio),
       ...(content.mimetype ? { mimetype: content.mimetype } : {}),

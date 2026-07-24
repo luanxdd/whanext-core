@@ -12,9 +12,22 @@ import type {
   SentMessage,
 } from '@/models/message.js';
 
-export type ConnectionState = 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'closed';
-export type PresenceState = 'typing' | 'recording' | 'paused';
-export type ParticipantAction = 'remove' | 'promote' | 'demote';
+export type ConnectionState = 
+  | 'idle'
+  | 'connecting'
+  | 'connected'
+  | 'reconnecting'
+  | 'closed';
+
+export type PresenceState = 
+  | 'typing'
+  | 'recording'
+  | 'paused';
+
+export type ParticipantAction = 
+  | 'remove'
+  | 'promote'
+  | 'demote';
 
 export interface ParticipantUpdateResult {
   success: boolean;

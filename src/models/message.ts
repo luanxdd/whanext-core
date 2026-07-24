@@ -103,8 +103,13 @@ export interface AudioContent {
   voice?: boolean;
 }
 
+export interface StickerContent {
+  sticker: MediaSource;
+}
+
 export type MessageContent = 
   | TextContent 
   | ImageContent 
   | VideoContent 
-  | AudioContent;
+  | AudioContent
+  | StickerContent;

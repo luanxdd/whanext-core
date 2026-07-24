@@ -290,6 +290,10 @@ await app.media.audio(chatId, {
   voice: true,
 });
 
+await app.media.sticker(chatId, {
+  sticker: { path: './sticker.webp' },
+});
+
 const downloaded = await app.media.download(message);
 
 await writeFile(`./downloads/${downloaded.fileName ?? message.id}`, downloaded.data);
@@ -297,7 +301,7 @@ await writeFile(`./downloads/${downloaded.fileName ?? message.id}`, downloaded.d
 
 `download()` aceita a `Message` recebida ou a sua `MessageKey` e devolve o buffer junto dos metadados normalizados. A mídia deve ser baixada enquanto a mensagem ainda está no cache da instância; o provider tenta renovar a URL de mídia automaticamente quando necessário.
 
-Texto, imagem e vídeo aceitam `User` diretamente em `mentions`.
+Stickers aceitam `Uint8Array`, URL ou caminho local e devem estar em WebP, inclusive para animações. Texto, imagem e vídeo aceitam `User` diretamente em `mentions`.
 
 ## Grupos e membros
 
@@ -567,7 +571,7 @@ Todos os erros públicos usam `WhaNextError` e códigos estáveis. O logger regi
 | Domínio | Responsabilidade |
 | --- | --- |
 | `app.message` | Envio, reply, edição, exclusão, texto e reações |
-| `app.media` | Envio e download de mídia |
+| `app.media` | Envio, download e stickers |
 | `app.group` | Estado, convite, pin e metadados |
 | `app.member` | Remoção, promoção e rebaixamento |
 | `app.user` | Criação e resolução de usuários |

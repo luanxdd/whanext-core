@@ -2,6 +2,12 @@
 
 Todas as mudanças relevantes do projeto serão registradas neste arquivo.
 
+## 0.8.0
+
+### Adicionado
+
+- `app.media.sticker(chatId, { sticker })` para enviar stickers WebP estáticos ou animados a partir de bytes, URL ou arquivo local.
+
 ## 0.7.0
 
 ### Adicionado

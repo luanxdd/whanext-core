@@ -5,6 +5,7 @@ import type {
   Message,
   MessageKey,
   SentMessage,
+  StickerContent,
   VideoContent,
 } from '@/models/message.js';
 import type { WhatsAppProvider } from '@/provider/provider.js';
@@ -25,6 +26,10 @@ export class MediaService {
   }
 
   audio(chatId: string, content: AudioContent): Promise<SentMessage> {
+    return this.#provider.sendMessage(chatId, content);
+  }
+
+  sticker(chatId: string, content: StickerContent): Promise<SentMessage> {
     return this.#provider.sendMessage(chatId, content);
   }
 

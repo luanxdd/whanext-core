@@ -1,6 +1,29 @@
-export type GroupAccess = 'open' | 'closed';
-export type GroupRole = 'member' | 'admin' | 'owner';
-export type GroupAddressingMode = 'lid' | 'pn';
+export type GroupAccess = 
+  | 'open'
+  | 'closed';
+
+export type GroupRole = 
+  | 'member'
+  | 'admin'
+  | 'owner';
+
+export type GroupAddressingMode = 
+  | 'lid'
+  | 'pn';
+
+export type GroupParticipantAction = 
+  | 'add'
+  | 'remove'
+  | 'promote'
+  | 'demote'
+  | 'modify';
+
+export interface GroupParticipantsChanged {
+  groupId: string;
+  action: GroupParticipantAction;
+  participantIds: string[];
+  authorId?: string;
+}
 
 export interface GroupParticipant {
   id: string;
@@ -28,7 +51,10 @@ export interface InviteResult {
   code: string;
 }
 
-export type MemberAction = 'removed' | 'promoted' | 'demoted';
+export type MemberAction = 
+  | 'removed'
+  | 'promoted'
+  | 'demoted';
 
 export type MemberActionState =
   | MemberAction

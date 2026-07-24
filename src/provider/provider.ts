@@ -1,12 +1,14 @@
 import type { CallEvent } from '@/models/call.js';
 import type {
   GroupAccess,
+  GroupParticipantsChanged,
   GroupSnapshot,
 } from '@/models/group.js';
 import type {
   Message,
   MessageContent,
   MessageKey,
+  DownloadedMedia,
   SentMessage,
 } from '@/models/message.js';
 
@@ -30,6 +32,7 @@ export interface ProviderEvents {
   message: Message;
   connection: ConnectionUpdate;
   groupChanged: { groupId: string };
+  groupParticipantsChanged: GroupParticipantsChanged;
   call: CallEvent;
 }
 
@@ -45,6 +48,8 @@ export interface WhatsAppProvider {
     listener: (payload: ProviderEvents[Event]) => void | Promise<void>,
   ): Unsubscribe;
   sendMessage(chatId: string, content: MessageContent, replyTo?: MessageKey): Promise<SentMessage>;
+  reactToMessage(key: MessageKey, emoji?: string): Promise<SentMessage>;
+  downloadMedia(key: MessageKey): Promise<DownloadedMedia>;
   editMessage(key: MessageKey, content: string): Promise<SentMessage>;
   deleteMessage(key: MessageKey): Promise<void>;
   getGroup(groupId: string): Promise<GroupSnapshot>;

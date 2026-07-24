@@ -57,6 +57,8 @@ export type {
   GroupAccess,
   GroupAddressingMode,
   GroupParticipant,
+  GroupParticipantAction,
+  GroupParticipantsChanged,
   GroupRole,
   GroupSnapshot,
   InviteResult,
@@ -64,6 +66,7 @@ export type {
 } from '@/models/group.js';
 export type {
   AudioContent,
+  DownloadedMedia,
   ImageContent,
   MediaKind,
   MediaSource,

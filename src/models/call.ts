@@ -1,4 +1,10 @@
-export type CallStatus = 'offer' | 'ringing' | 'preaccept' | 'timeout' | 'reject' | 'accept';
+export type CallStatus = 
+  | 'offer'
+  | 'ringing'
+  | 'preaccept'
+  | 'timeout'
+  | 'reject'
+  | 'accept';
 
 export interface CallEvent {
   id: string;

@@ -139,6 +139,58 @@ describe('WhaNextApp', () => {
     expect(provider.deleted).toEqual([message.keys]);
   });
 
+  it('downloads media through the normalized message API', async () => {
+    const provider = new FakeProvider();
+    const app = await create({ provider });
+
+    const downloaded = await app.media.download({
+      ...message,
+      hasMedia: true,
+      media: { kind: 'image', viewOnce: false },
+    });
+
+    expect(downloaded).toMatchObject({ kind: 'image', mimetype: 'image/jpeg' });
+    expect(downloaded.data.toString()).toBe('media');
+    expect(provider.downloadedMedia).toEqual([message.keys]);
+  });
+
+  it('adds and removes reactions through the normalized message API', async () => {
+    const provider = new FakeProvider();
+    const app = await create({ provider });
+
+    await app.message.react(message, '👏🏻');
+    await app.message.unreact(message);
+
+    expect(provider.reactions).toEqual([
+      { key: message.keys, emoji: '👏🏻' },
+      { key: message.keys },
+    ]);
+  });
+
+  it('emits detailed participant changes and invalidates group metadata', async () => {
+    const provider = new FakeProvider();
+    const app = await create({ provider });
+    const onChange = vi.fn();
+    app.on('groupParticipantsChanged', onChange);
+
+    await app.group.metadata('123@g.us');
+    await provider.events.emit('groupParticipantsChanged', {
+      groupId: '123@g.us',
+      action: 'add',
+      participantIds: ['5511000000000@s.whatsapp.net'],
+      authorId: '5511999999999@s.whatsapp.net',
+    });
+    await app.group.metadata('123@g.us');
+
+    expect(onChange).toHaveBeenCalledWith({
+      groupId: '123@g.us',
+      action: 'add',
+      participantIds: ['5511000000000@s.whatsapp.net'],
+      authorId: '5511999999999@s.whatsapp.net',
+    });
+    expect(provider.calls.getGroup).toBe(2);
+  });
+
   it('emits the call event received from the provider', async () => {
     const provider = new FakeProvider();
     const app = await create({ provider });

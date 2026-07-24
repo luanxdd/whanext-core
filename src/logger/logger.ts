@@ -1,7 +1,16 @@
 import { WhaNextError } from '@/errors/error.js';
 
-export type LogLevel = 'debug' | 'info' | 'warn' | 'error' | 'silent';
-export type LogFormat = 'pretty' | 'json';
+export type LogLevel = 
+  | 'debug'
+  | 'info'
+  | 'warn'
+  | 'error'
+  | 'silent';
+  
+export type LogFormat = 
+  | 'pretty'
+  | 'json';
+  
 export type LogContext = Readonly<Record<string, unknown>>;
 
 export interface LogEntry {

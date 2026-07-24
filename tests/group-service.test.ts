@@ -30,6 +30,19 @@ describe('group and member services', () => {
     expect(provider.calls.getGroup).toBe(1);
   });
 
+  it('coalesces simultaneous metadata requests for the same group', async () => {
+    const provider = new FakeProvider();
+    const app = await create({ provider });
+
+    await Promise.all([
+      app.group.metadata('123@g.us'),
+      app.group.metadata('123@g.us'),
+      app.group.metadata('123@g.us'),
+    ]);
+
+    expect(provider.calls.getGroup).toBe(1);
+  });
+
   it('returns a typed state when a member is already an admin', async () => {
     const provider = new FakeProvider();
     const app = await create({ provider });

@@ -27,6 +27,7 @@ export interface CreateOptions {
   mute?: MuteOptions;
   router?: Omit<RouterOptions, 'prefix'>;
   reconnect?: ReconnectOptions;
+  messageCacheSize?: number;
   provider?: WhatsAppProvider;
 }
 
@@ -36,6 +37,9 @@ export async function create(options: CreateOptions = {}): Promise<WhaNextApp> {
     auth: options.auth ?? './session',
     browser: options.browser ?? Browser.Windows,
     logger: logger.child('provider'),
+    ...(options.messageCacheSize !== undefined
+      ? { messageCacheSize: options.messageCacheSize }
+      : {}),
     ...(options.reconnect ? { reconnect: options.reconnect } : {}),
   });
 

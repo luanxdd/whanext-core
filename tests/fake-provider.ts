@@ -3,6 +3,7 @@ import type {
   GroupSnapshot,
 } from '@/models/group.js';
 import type {
+  DownloadedMedia,
   MessageContent,
   MessageKey,
   SentMessage,
@@ -21,6 +22,8 @@ export class FakeProvider implements WhatsAppProvider {
   readonly sent: Array<{ chatId: string; content: MessageContent; replyTo?: MessageKey }> = [];
   readonly deleted: MessageKey[] = [];
   readonly rejectedCalls: Array<{ callId: string; from: string }> = [];
+  readonly downloadedMedia: MessageKey[] = [];
+  readonly reactions: Array<{ key: MessageKey; emoji?: string }> = [];
   readonly calls = {
     getGroup: 0,
     setGroupAccess: 0,
@@ -74,6 +77,25 @@ export class FakeProvider implements WhatsAppProvider {
       id: `sent-${this.sent.length}`,
       chatId,
       keys: { id: `sent-${this.sent.length}`, chatId, fromMe: true },
+      timestamp: new Date(),
+    };
+  }
+
+  async downloadMedia(key: MessageKey): Promise<DownloadedMedia> {
+    this.downloadedMedia.push(key);
+    return {
+      data: Buffer.from('media'),
+      kind: 'image',
+      mimetype: 'image/jpeg',
+    };
+  }
+
+  async reactToMessage(key: MessageKey, emoji?: string): Promise<SentMessage> {
+    this.reactions.push({ key, ...(emoji ? { emoji } : {}) });
+    return {
+      id: `reaction-${this.reactions.length}`,
+      chatId: key.chatId,
+      keys: { id: `reaction-${this.reactions.length}`, chatId: key.chatId, fromMe: true },
       timestamp: new Date(),
     };
   }

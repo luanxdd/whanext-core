@@ -14,6 +14,7 @@ import {
   type LoggerConfig,
 } from '@/logger/logger.js';
 import type { CallEvent } from '@/models/call.js';
+import type { GroupParticipantsChanged } from '@/models/group.js';
 import type { Message } from '@/models/message.js';
 import type { MuteOptions } from '@/mute/mute-store.js';
 import {
@@ -39,6 +40,7 @@ export interface AppEvents {
   error: WhaNextError;
   mute: MuteEnforcement;
   call: CallEvent;
+  groupParticipantsChanged: GroupParticipantsChanged;
 }
 
 export interface LoginOptions {
@@ -91,7 +93,11 @@ export class WhaNextApp {
     this.#provider = provider;
     this.#phone = options.phone;
     this.logger = logger;
-    const cache = options.cache?.store ?? new MemoryCache();
+    const cache = options.cache?.store ?? new MemoryCache(
+      options.cache?.memoryMaxEntries === undefined
+        ? undefined
+        : { maxEntries: options.cache.memoryMaxEntries },
+    );
     this.group = new GroupService(provider, cache, options.cache?.groupTtlMs);
     this.member = new MemberService(provider, this.group);
     this.message = new MessageService(provider);
@@ -222,6 +228,11 @@ export class WhaNextApp {
     });
 
     this.#provider.on('groupChanged', ({ groupId }) => this.group.invalidate(groupId));
+
+    this.#provider.on('groupParticipantsChanged', async (change) => {
+      await this.group.invalidate(change.groupId);
+      await this.#events.emit('groupParticipantsChanged', change);
+    });
 
     this.#provider.on('call', async (call) => {
       this.logger.debug('Call received', {

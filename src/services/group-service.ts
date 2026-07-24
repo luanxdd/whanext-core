@@ -14,6 +14,7 @@ export class GroupService {
   readonly #provider: WhatsAppProvider;
   readonly #cache: CacheStore;
   readonly #ttlMs: number;
+  readonly #requests = new Map<string, Promise<GroupSnapshot>>();
 
   constructor(provider: WhatsAppProvider, cache: CacheStore, ttlMs = 300_000) {
     this.#provider = provider;
@@ -76,9 +77,20 @@ export class GroupService {
       }
     }
 
-    const group = await this.#provider.getGroup(groupId);
-    await this.#cache.set(key, group, this.#ttlMs);
-    return group;
+    const pending = this.#requests.get(key);
+
+    if (pending) {
+      return pending;
+    }
+
+    const request = this.#loadMetadata(key, groupId);
+    this.#requests.set(key, request);
+
+    try {
+      return await request;
+    } finally {
+      this.#requests.delete(key);
+    }
   }
 
   async isAdmin(
@@ -144,6 +156,12 @@ export class GroupService {
 
   #key(groupId: string): string {
     return `group:${groupId}`;
+  }
+
+  async #loadMetadata(key: string, groupId: string): Promise<GroupSnapshot> {
+    const group = await this.#provider.getGroup(groupId);
+    await this.#cache.set(key, group, this.#ttlMs);
+    return group;
   }
 
   #matchesParticipant(

@@ -7,7 +7,12 @@ export interface MessageKey {
   participantId?: string;
 }
 
-export type MediaKind = 'image' | 'video' | 'audio' | 'document' | 'sticker';
+export type MediaKind = 
+  | 'image'
+  | 'video'
+  | 'audio'
+  | 'document'
+  | 'sticker';
 
 export interface MessageMedia {
   kind: MediaKind;
@@ -56,8 +61,21 @@ export interface SentMessage {
   timestamp: Date;
 }
 
-export type MediaSource = Uint8Array | { url: string } | { path: string };
-export type MentionTarget = string | User;
+export interface DownloadedMedia {
+  data: Buffer;
+  kind: MediaKind;
+  mimetype?: string;
+  fileName?: string;
+}
+
+export type MediaSource = 
+  | Uint8Array 
+  | { url: string } 
+  | { path: string };
+
+export type MentionTarget = 
+  | string 
+  | User;
 
 export interface TextContent {
   text: string;
@@ -85,4 +103,8 @@ export interface AudioContent {
   voice?: boolean;
 }
 
-export type MessageContent = TextContent | ImageContent | VideoContent | AudioContent;
+export type MessageContent = 
+  | TextContent 
+  | ImageContent 
+  | VideoContent 
+  | AudioContent;

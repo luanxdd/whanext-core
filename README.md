@@ -35,7 +35,7 @@ await app.login({
 - Login por pairing code, sessão persistente e reconexão automática.
 - Prefixo global e comandos declarativos com argumentos tipados.
 - Usuários normalizados entre JID, LID e PN.
-- Mensagens, replies, edição, exclusão, menções e mídias.
+- Mensagens, replies, edição, exclusão, menções, mídias e download normalizado.
 - Operações de grupos e membros com resultados idempotentes.
 - Cache de metadados transparente e substituível.
 - Mute permanente ou temporário com SQLite ou banco próprio.
@@ -261,9 +261,14 @@ await app.message.reply(message, {
 
 await app.message.edit(sent, 'Texto atualizado.');
 await app.message.delete(sent);
+
+await app.message.react(sent, '👏🏻');
+await app.message.unreact(sent);
 ```
 
 `delete()` aceita `Message`, `SentMessage` ou `MessageKey`.
+
+`react()` aceita os mesmos tipos e adiciona uma reação à mensagem. `unreact()` remove a reação da conta conectada.
 
 ## Mídias
 
@@ -284,7 +289,13 @@ await app.media.audio(chatId, {
   mimetype: 'audio/ogg; codecs=opus',
   voice: true,
 });
+
+const downloaded = await app.media.download(message);
+
+await writeFile(`./downloads/${downloaded.fileName ?? message.id}`, downloaded.data);
 ```
+
+`download()` aceita a `Message` recebida ou a sua `MessageKey` e devolve o buffer junto dos metadados normalizados. A mídia deve ser baixada enquanto a mensagem ainda está no cache da instância; o provider tenta renovar a URL de mídia automaticamente quando necessário.
 
 Texto, imagem e vídeo aceitam `User` diretamente em `mentions`.
 
@@ -304,6 +315,19 @@ await app.member.demote(groupId, user);
 ```
 
 Estados como `already_open`, `already_admin`, `not_admin`, `not_in_group` e `already_removed` evitam mutações redundantes. A biblioteca escolhe automaticamente a identidade correta para grupos LID ou PN e só retorna sucesso depois da confirmação do WhatsApp.
+
+Mudanças feitas por outros participantes podem ser acompanhadas sem lidar com o provider:
+
+```ts
+app.on('groupParticipantsChanged', async (change) => {
+  console.log(change.groupId);
+  console.log(change.action);
+  console.log(change.participantIds);
+  console.log(change.authorId);
+});
+```
+
+`action` pode ser `add`, `remove`, `promote`, `demote` ou `modify`. O cache de metadados do grupo é invalidado antes desse evento ser emitido.
 
 ## Mute nativo
 
@@ -489,11 +513,18 @@ const app = await create({
   cache: {
     store: myRedisStore,
     groupTtlMs: 300_000,
+    memoryMaxEntries: 1_000,
   },
 });
 ```
 
-O cache padrão vive na instância do app. Eventos e mutações de grupo invalidam automaticamente entradas relacionadas.
+O cache padrão vive na instância do app, usa LRU limitado e elimina entradas expiradas durante as leituras. Consultas simultâneas dos mesmos metadados são agrupadas em uma única chamada ao WhatsApp. Eventos e mutações de grupo invalidam automaticamente entradas relacionadas.
+
+O cache interno de mensagens mantém até 1.000 mensagens por padrão para replies, reenvios do provider e downloads de mídia. Ajuste quando necessário:
+
+```ts
+const app = await create({ messageCacheSize: 2_000 });
+```
 
 ## Presença
 
@@ -502,6 +533,8 @@ await app.chat.typing(chatId);
 await app.chat.recording(chatId);
 await app.chat.stopTyping(chatId);
 ```
+
+`typing()` envia `composing`, `recording()` envia `recording` com mídia de áudio e `stopTyping()` envia `paused`, conforme o protocolo do WhatsApp. Nenhuma assinatura de presença desnecessária é feita antes do envio.
 
 ## Chamadas
 
@@ -533,8 +566,8 @@ Todos os erros públicos usam `WhaNextError` e códigos estáveis. O logger regi
 
 | Domínio | Responsabilidade |
 | --- | --- |
-| `app.message` | Envio, reply, edição, exclusão e texto |
-| `app.media` | Imagem, vídeo e áudio |
+| `app.message` | Envio, reply, edição, exclusão, texto e reações |
+| `app.media` | Envio e download de mídia |
 | `app.group` | Estado, convite, pin e metadados |
 | `app.member` | Remoção, promoção e rebaixamento |
 | `app.user` | Criação e resolução de usuários |
@@ -544,6 +577,7 @@ Todos os erros públicos usam `WhaNextError` e códigos estáveis. O logger regi
 | `app.router()` | Registro e despacho de comandos |
 | `loadCommands()` | Autoload de comandos a partir de uma pasta |
 | `app.health()` | Snapshot de saúde da aplicação |
+| `app.on('groupParticipantsChanged')` | Alterações de participantes em grupos |
 
 ## Exemplo executável
 

@@ -2,6 +2,31 @@
 
 Todas as mudanças relevantes do projeto serão registradas neste arquivo.
 
+## 0.7.0
+
+### Adicionado
+
+- `app.message.react(message, emoji)` e `app.message.unreact(message)` para adicionar e remover reações sem expor tipos do provider.
+- Evento `groupParticipantsChanged`, com grupo, ação, participantes afetados e autor quando informado pelo WhatsApp.
+
+### Alterado
+
+- Alterações de participantes continuam invalidando automaticamente o cache de metadados do grupo antes da emissão do evento público.
+
+## 0.6.0
+
+### Adicionado
+
+- `app.media.download(message)` para baixar imagens, vídeos, áudios, documentos e stickers recebidos como um `Buffer` com metadados normalizados.
+- Renovação automática da URL de mídia quando o link original expira.
+- Configurações `cache.memoryMaxEntries` e `messageCacheSize` para limitar a memória usada pelos caches internos.
+
+### Alterado
+
+- O cache em memória agora usa LRU e agrupa buscas simultâneas dos metadados do mesmo grupo em uma única consulta ao WhatsApp.
+- O cache de mensagens usa a chave completa da conversa, evitando colisões entre mensagens de chats distintos, e mantém até 1.000 entradas por padrão.
+- Envio de presença deixou de fazer uma assinatura remota antes de cada atualização, reduzindo uma ida extra à rede para `typing`, `recording` e `paused`.
+
 ## 0.5.1
 
 ### Adicionado

@@ -1,13 +1,13 @@
 import {
   Browsers,
   DisconnectReason,
+  downloadMediaMessage,
   makeWASocket,
   proto,
   useMultiFileAuthState,
   type AnyMessageContent,
   type WACallEvent,
   type WAMessage,
-  type WAMessageContent,
   type WAMessageKey,
   type WASocket,
 } from '@whiskeysockets/baileys';
@@ -17,10 +17,12 @@ import { Logger } from '@/logger/logger.js';
 import type { CallEvent, CallStatus } from '@/models/call.js';
 import type {
   GroupAccess,
+  GroupParticipantsChanged,
   GroupSnapshot,
 } from '@/models/group.js';
 import type {
   MediaSource,
+  DownloadedMedia,
   MentionTarget,
   MessageContent,
   MessageKey,
@@ -46,6 +48,7 @@ export interface BaileysProviderOptions {
   auth: string;
   browser: Browser;
   logger?: Logger;
+  messageCacheSize?: number;
   reconnect?: {
     enabled?: boolean;
     maxAttempts?: number;
@@ -58,7 +61,8 @@ export class BaileysProvider implements WhatsAppProvider {
   readonly #options: BaileysProviderOptions;
   readonly #events = new TypedEventEmitter<ProviderEvents>();
   readonly #logger: Logger;
-  readonly #messageStore = new Map<string, WAMessageContent>();
+  readonly #messageStore = new Map<string, WAMessage>();
+  readonly #messageCacheSize: number;
   #socket: WASocket | undefined;
   #saveCredentials: (() => Promise<void>) | undefined;
   #saveQueue: Promise<void> = Promise.resolve();
@@ -70,6 +74,7 @@ export class BaileysProvider implements WhatsAppProvider {
   constructor(options: BaileysProviderOptions) {
     this.#options = options;
     this.#logger = options.logger ?? new Logger('silent');
+    this.#messageCacheSize = Math.max(1, options.messageCacheSize ?? 1_000);
   }
 
   on<Event extends keyof ProviderEvents>(
@@ -101,7 +106,7 @@ export class BaileysProvider implements WhatsAppProvider {
         markOnlineOnConnect: false,
         enableAutoSessionRecreation: true,
         enableRecentMessageCache: true,
-        getMessage: async (key) => key.id ? this.#messageStore.get(key.id) : undefined,
+        getMessage: async (key) => this.#messageStore.get(this.#messageStoreKey(key))?.message ?? undefined,
       });
       this.#socket = socket;
       this.#bind(socket);
@@ -204,6 +209,45 @@ export class BaileysProvider implements WhatsAppProvider {
     return this.#sent(result);
   }
 
+  async reactToMessage(key: MessageKey, emoji?: string): Promise<SentMessage> {
+    const result = await this.#requireSocket().sendMessage(key.chatId, {
+      react: {
+        text: emoji ?? '',
+        key: this.#toWaKey(key),
+      },
+    });
+    return this.#sent(result);
+  }
+
+  async downloadMedia(key: MessageKey): Promise<DownloadedMedia> {
+    const message = this.#messageStore.get(this.#messageStoreKey(key));
+
+    if (!message?.message) {
+      throw new WhaNextError(
+        'MEDIA_NOT_AVAILABLE',
+        'The media is unavailable. Download it from the received message event while it is cached.',
+        { recoverable: true },
+      );
+    }
+
+    const data = await downloadMediaMessage(message, 'buffer', {}, {
+      reuploadRequest: (current) => this.#requireSocket().updateMediaMessage(current),
+      logger: createBaileysLogger(this.#logger.child('media')),
+    });
+    const media = normalizeBaileysMessage(message)?.media;
+
+    if (!media) {
+      throw new WhaNextError('MEDIA_NOT_AVAILABLE', 'The selected message does not contain media.');
+    }
+
+    return {
+      data,
+      kind: media.kind,
+      ...(media.mimetype ? { mimetype: media.mimetype } : {}),
+      ...(media.fileName ? { fileName: media.fileName } : {}),
+    };
+  }
+
   async editMessage(key: MessageKey, content: string): Promise<SentMessage> {
     const result = await this.#requireSocket().sendMessage(key.chatId, {
       text: content,
@@ -289,7 +333,6 @@ export class BaileysProvider implements WhatsAppProvider {
 
   async setPresence(chatId: string, state: PresenceState): Promise<void> {
     const socket = this.#requireSocket();
-    await socket.presenceSubscribe(chatId);
     const presence = state === 'typing'
       ? 'composing'
       : state === 'recording'
@@ -315,7 +358,7 @@ export class BaileysProvider implements WhatsAppProvider {
       if (type !== 'notify') return;
 
       for (const raw of messages) {
-        if (raw.key.id && raw.message) this.#remember(raw.key.id, raw.message);
+        if (raw.key.id && raw.message) this.#remember(raw);
         const message = normalizeBaileysMessage(raw);
         if (message) void this.#events.emit('message', message);
       }
@@ -327,7 +370,10 @@ export class BaileysProvider implements WhatsAppProvider {
       }
     });
 
-    socket.ev.on('group-participants.update', ({ id }) => {
+    socket.ev.on('group-participants.update', (update) => {
+      const change = this.#groupParticipantsChanged(update);
+      void this.#events.emit('groupParticipantsChanged', change);
+      const { id } = update;
       void this.#events.emit('groupChanged', { groupId: id });
     });
 
@@ -501,7 +547,7 @@ export class BaileysProvider implements WhatsAppProvider {
       throw new WhaNextError('PROVIDER_ERROR', 'WhatsApp did not confirm the sent message.');
     }
 
-    if (message.message) this.#remember(message.key.id, message.message);
+    if (message.message) this.#remember(message);
     return {
       id: message.key.id,
       chatId: message.key.remoteJid,
@@ -522,6 +568,24 @@ export class BaileysProvider implements WhatsAppProvider {
     };
   }
 
+  #groupParticipantsChanged(change: {
+    id: string;
+    action: GroupParticipantsChanged['action'];
+    participants: Array<{ id?: string | null }>;
+    author?: string | null;
+  }): GroupParticipantsChanged {
+    const participantIds = change.participants
+      .map((participant) => participant.id)
+      .filter((id): id is string => Boolean(id));
+
+    return {
+      groupId: change.id,
+      action: change.action,
+      participantIds,
+      ...(change.author ? { authorId: change.author } : {}),
+    };
+  }
+
   #callStatus(status: WACallEvent['status']): CallStatus {
     const known: readonly CallStatus[] = [
       'offer',
@@ -534,12 +598,21 @@ export class BaileysProvider implements WhatsAppProvider {
     return known.find((value) => value === status) ?? 'timeout';
   }
 
-  #remember(id: string, message: WAMessageContent): void {
-    this.#messageStore.set(id, message);
+  #remember(message: WAMessage): void {
+    const key = this.#messageStoreKey(message.key);
+    this.#messageStore.delete(key);
+    this.#messageStore.set(key, message);
 
-    if (this.#messageStore.size > 500) {
+    while (this.#messageStore.size > this.#messageCacheSize) {
       const oldest = this.#messageStore.keys().next().value as string | undefined;
       if (oldest) this.#messageStore.delete(oldest);
     }
+  }
+
+  #messageStoreKey(
+    key: Pick<WAMessageKey, 'id' | 'remoteJid'> | MessageKey,
+  ): string {
+    const chatId = 'chatId' in key ? key.chatId : key.remoteJid;
+    return `${chatId ?? ''}:${key.id ?? ''}`;
   }
 }

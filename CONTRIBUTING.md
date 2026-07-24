@@ -18,6 +18,9 @@ npm run check
 - A API pública usa modelos e erros do WhaNext.
 - Operações dependentes de estado retornam resultados tipados e idempotentes.
 - JID, LID e PN são resolvidos pela biblioteca.
+- Mídias são expostas por modelos normalizados; tipos e objetos do provider não entram na API pública.
+- APIs de presença não devem adicionar chamadas remotas além da atualização de estado solicitada.
+- Caches internos devem ter limite de memória, TTL quando aplicável e cobertura para concorrência.
 - Novos comportamentos possuem testes sem conexão real com o WhatsApp.
 - Imports com vários nomes mantêm um nome por linha.
 - Código-fonte não contém comentários explicando implementação óbvia.

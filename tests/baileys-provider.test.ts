@@ -11,6 +11,9 @@ const mocks = vi.hoisted(() => {
   const socketOptions: unknown[] = [];
   const waitForConnectionUpdate = vi.fn(async () => undefined);
   const requestPairingCode = vi.fn(async () => '1234-5678');
+  const sendPresenceUpdate = vi.fn(async () => undefined);
+  const presenceSubscribe = vi.fn(async () => undefined);
+  const downloadMediaMessage = vi.fn(async () => Buffer.from('media-bytes'));
   const socket = {
     ev: {
       on: vi.fn((event: string, listener: (payload: never) => void) => {
@@ -21,6 +24,9 @@ const mocks = vi.hoisted(() => {
     rejectCall: vi.fn(async () => undefined),
     waitForConnectionUpdate,
     requestPairingCode,
+    sendPresenceUpdate,
+    presenceSubscribe,
+    downloadMediaMessage,
     groupMetadata: vi.fn(async () => ({
       id: '123@g.us',
       subject: 'WhaNext',
@@ -33,11 +39,15 @@ const mocks = vi.hoisted(() => {
         admin: null,
       }],
     })),
+    updateMediaMessage: vi.fn(async (message: unknown) => message),
   };
 
   return {
     handlers,
     requestPairingCode,
+    sendPresenceUpdate,
+    presenceSubscribe,
+    downloadMediaMessage,
     socket,
     socketOptions,
     waitForConnectionUpdate,
@@ -56,6 +66,7 @@ vi.mock('@whiskeysockets/baileys', () => ({
     loggedOut: 401,
     badSession: 500,
   },
+  downloadMediaMessage: mocks.downloadMediaMessage,
   makeWASocket: (options: unknown) => {
     mocks.socketOptions.push(options);
     return mocks.socket;
@@ -65,9 +76,9 @@ vi.mock('@whiskeysockets/baileys', () => ({
     state: { creds: { registered: false } },
     saveCreds: async () => undefined,
   }),
-  extractMessageContent: vi.fn(),
-  getContentType: vi.fn(),
-  normalizeMessageContent: vi.fn(),
+  extractMessageContent: (message: unknown) => message,
+  getContentType: (message: Record<string, unknown>) => Object.keys(message)[0],
+  normalizeMessageContent: (message: unknown) => message,
 }));
 
 import { Browser } from '@/auth/browser.js';
@@ -223,5 +234,99 @@ describe('BaileysProvider pairing', () => {
       'call-1',
       '5511999999999@s.whatsapp.net',
     );
+  });
+
+  it('sends chat presence directly without subscribing first', async () => {
+    const provider = new BaileysProvider({ auth: './session', browser: Browser.Windows });
+    await provider.connect();
+
+    await provider.setPresence('5511999999999@s.whatsapp.net', 'typing');
+    await provider.setPresence('5511999999999@s.whatsapp.net', 'recording');
+    await provider.setPresence('5511999999999@s.whatsapp.net', 'paused');
+
+    expect(mocks.presenceSubscribe).not.toHaveBeenCalled();
+    expect(mocks.sendPresenceUpdate).toHaveBeenNthCalledWith(
+      1,
+      'composing',
+      '5511999999999@s.whatsapp.net',
+    );
+    expect(mocks.sendPresenceUpdate).toHaveBeenNthCalledWith(
+      2,
+      'recording',
+      '5511999999999@s.whatsapp.net',
+    );
+    expect(mocks.sendPresenceUpdate).toHaveBeenNthCalledWith(
+      3,
+      'paused',
+      '5511999999999@s.whatsapp.net',
+    );
+  });
+
+  it('downloads cached media without exposing Baileys messages', async () => {
+    const provider = new BaileysProvider({ auth: './session', browser: Browser.Windows });
+    await provider.connect();
+    const emitMessages = mocks.handlers.get('messages.upsert') as
+      | ((update: unknown) => void)
+      | undefined;
+
+    emitMessages?.({
+      type: 'notify',
+      messages: [{
+        key: {
+          id: 'media-1',
+          remoteJid: '5511999999999@s.whatsapp.net',
+          fromMe: false,
+        },
+        message: {
+          imageMessage: {
+            url: 'https://example.com/media',
+            mimetype: 'image/jpeg',
+          },
+        },
+      }],
+    });
+
+    const options = mocks.socketOptions[0] as {
+      getMessage(key: { id: string; remoteJid: string }): Promise<unknown>;
+    };
+
+    expect(await options.getMessage({
+      id: 'media-1',
+      remoteJid: '5511999999999@s.whatsapp.net',
+    })).toMatchObject({ imageMessage: { mimetype: 'image/jpeg' } });
+
+    const media = await provider.downloadMedia({
+      id: 'media-1',
+      chatId: '5511999999999@s.whatsapp.net',
+      fromMe: false,
+    });
+
+    expect(media).toMatchObject({ kind: 'image', mimetype: 'image/jpeg' });
+    expect(media.data.toString()).toBe('media-bytes');
+    expect(mocks.downloadMediaMessage).toHaveBeenCalledOnce();
+  });
+
+  it('normalizes participant changes received from the socket', async () => {
+    const provider = new BaileysProvider({ auth: './session', browser: Browser.Windows });
+    await provider.connect();
+    const onChange = vi.fn();
+    provider.on('groupParticipantsChanged', onChange);
+    const emitChange = mocks.handlers.get('group-participants.update') as
+      | ((change: unknown) => void)
+      | undefined;
+
+    emitChange?.({
+      id: '123@g.us',
+      action: 'promote',
+      author: '5511999999999@s.whatsapp.net',
+      participants: [{ id: '5511000000000@s.whatsapp.net' }],
+    });
+
+    expect(onChange).toHaveBeenCalledWith({
+      groupId: '123@g.us',
+      action: 'promote',
+      participantIds: ['5511000000000@s.whatsapp.net'],
+      authorId: '5511999999999@s.whatsapp.net',
+    });
   });
 });

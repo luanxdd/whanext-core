@@ -33,6 +33,16 @@ export class MessageService {
     return this.#provider.deleteMessage(key);
   }
 
+  react(message: Message | SentMessage | MessageKey, emoji: string): Promise<SentMessage> {
+    const key = 'keys' in message ? message.keys : message;
+    return this.#provider.reactToMessage(key, emoji);
+  }
+
+  unreact(message: Message | SentMessage | MessageKey): Promise<SentMessage> {
+    const key = 'keys' in message ? message.keys : message;
+    return this.#provider.reactToMessage(key);
+  }
+
   text(chatId: string, text: string, mentions?: MentionTarget[]): Promise<SentMessage> {
     const content: TextContent = { text };
 

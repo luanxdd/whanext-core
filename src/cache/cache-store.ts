@@ -8,4 +8,5 @@ export interface CacheStore {
 export interface CacheOptions {
   store?: CacheStore;
   groupTtlMs?: number;
+  memoryMaxEntries?: number;
 }

@@ -7,6 +7,7 @@ export type WhaNextErrorCode =
   | 'MEMBER_NOT_FOUND'
   | 'BOT_NOT_ADMIN'
   | 'MESSAGE_NOT_FOUND'
+  | 'MEDIA_NOT_AVAILABLE'
   | 'MUTE_DISABLED'
   | 'STORAGE_ERROR'
   | 'ARGUMENT_MISSING'

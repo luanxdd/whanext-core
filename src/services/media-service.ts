@@ -1,6 +1,9 @@
 import type {
   AudioContent,
+  DownloadedMedia,
   ImageContent,
+  Message,
+  MessageKey,
   SentMessage,
   VideoContent,
 } from '@/models/message.js';
@@ -23,5 +26,10 @@ export class MediaService {
 
   audio(chatId: string, content: AudioContent): Promise<SentMessage> {
     return this.#provider.sendMessage(chatId, content);
+  }
+
+  download(message: Message | MessageKey): Promise<DownloadedMedia> {
+    const key = 'keys' in message ? message.keys : message;
+    return this.#provider.downloadMedia(key);
   }
 }

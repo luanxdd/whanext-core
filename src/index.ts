@@ -11,7 +11,10 @@ export {
   type LoginOptions,
 } from '@/app/whanext-app.js';
 export { Browser } from '@/auth/browser.js';
-export { MemoryCache } from '@/cache/memory-cache.js';
+export {
+  MemoryCache,
+  type MemoryCacheStats,
+} from '@/cache/memory-cache.js';
 export type {
   CacheOptions,
   CacheStore,
@@ -19,9 +22,50 @@ export type {
 export { ArgsParser } from '@/commands/args-parser.js';
 export {
   defineCommand,
+  defineCommandGroup,
   defineCommands,
+  defineSubcommand,
+  isCommandGroup,
+  type CommandConcurrency,
+  type CommandCooldown,
   type CommandDefinition,
+  type CommandGroupDefinition,
+  type CommandHooks,
+  type CommandLocalization,
+  type CommandMetadata,
+  type CommandMiddleware,
+  type CommandScope,
+  type ConcurrencyStrategy,
+  type ExecutableCommandDefinition,
+  type RegisteredCommand,
 } from '@/commands/command.js';
+export {
+  DeferredReply,
+  type CommandChatContext,
+  type CommandContext,
+  type CommandGroupContext,
+  type CommandRuntimeServices,
+  type ReplyOptions,
+} from '@/commands/context.js';
+export {
+  guards,
+  type CommandGuard,
+  type GuardResult,
+} from '@/commands/guards.js';
+export {
+  option,
+  ParsedCommandOptions,
+  type BooleanOption,
+  type CommandOptionDefinition,
+  type CommandOptionSchema,
+  type CommandOptionValue,
+  type CommandOptionValues,
+  type DurationOption,
+  type EnumOption,
+  type NumberOption,
+  type StringOption,
+  type UserOption,
+} from '@/commands/options.js';
 export {
   loadCommands,
   type CommandRegistrar,
@@ -31,6 +75,9 @@ export {
 } from '@/commands/load-commands.js';
 export {
   CommandRouter,
+  type CommandCatalogOptions,
+  type CommandErrorHandler,
+  type CommandHelpOptions,
   type RouterOptions,
 } from '@/commands/router.js';
 export {

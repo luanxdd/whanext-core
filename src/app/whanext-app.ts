@@ -78,6 +78,7 @@ export class WhaNextApp {
   readonly user: UserService;
   readonly mute: MuteService;
   readonly logger: Logger;
+  readonly commands: CommandRouter;
   readonly #provider: WhatsAppProvider;
   readonly #phone: string | undefined;
   readonly #events = new TypedEventEmitter<AppEvents>();
@@ -109,10 +110,19 @@ export class WhaNextApp {
       ? options.mute?.store ?? new SqliteMuteStore(options.mute?.database)
       : undefined;
     this.mute = new MuteService(provider, muteStore);
-    this.#router = new CommandRouter(this.group, {
+    this.commands = new CommandRouter({
+      messages: this.message,
+      media: this.media,
+      groups: this.group,
+      members: this.member,
+      chats: this.chat,
+      users: this.user,
+      mute: this.mute,
+    }, {
       ...options.router,
       ...(options.prefix !== undefined ? { prefix: options.prefix } : {}),
     });
+    this.#router = this.commands;
     this.#bind();
     this.logger.debug('Application initialized', {
       muteEnabled: this.mute.enabled,

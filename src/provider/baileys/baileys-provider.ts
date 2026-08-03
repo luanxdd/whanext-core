@@ -6,6 +6,7 @@ import {
   proto,
   useMultiFileAuthState,
   type AnyMessageContent,
+  type GroupMetadata,
   type WACallEvent,
   type WAMessage,
   type WAMessageKey,
@@ -49,6 +50,11 @@ export interface BaileysProviderOptions {
   browser: Browser;
   logger?: Logger;
   messageCacheSize?: number;
+  groupMetadataCache?: {
+    enabled?: boolean;
+    ttlMs?: number;
+    maxEntries?: number;
+  };
   reconnect?: {
     enabled?: boolean;
     maxAttempts?: number;
@@ -57,12 +63,28 @@ export interface BaileysProviderOptions {
   };
 }
 
+interface GroupMetadataCacheEntry {
+  value: GroupMetadata;
+  expiresAt: number;
+}
+
+interface GroupMetadataRequest {
+  generation: number;
+  promise: Promise<GroupMetadata>;
+}
+
 export class BaileysProvider implements WhatsAppProvider {
   readonly #options: BaileysProviderOptions;
   readonly #events = new TypedEventEmitter<ProviderEvents>();
   readonly #logger: Logger;
   readonly #messageStore = new Map<string, WAMessage>();
   readonly #messageCacheSize: number;
+  readonly #groupMetadataCache = new Map<string, GroupMetadataCacheEntry>();
+  readonly #groupMetadataRequests = new Map<string, GroupMetadataRequest>();
+  readonly #groupMetadataGenerations = new Map<string, number>();
+  readonly #groupMetadataCacheEnabled: boolean;
+  readonly #groupMetadataCacheTtlMs: number;
+  readonly #groupMetadataCacheSize: number;
   #socket: WASocket | undefined;
   #saveCredentials: (() => Promise<void>) | undefined;
   #saveQueue: Promise<void> = Promise.resolve();
@@ -75,6 +97,9 @@ export class BaileysProvider implements WhatsAppProvider {
     this.#options = options;
     this.#logger = options.logger ?? new Logger('silent');
     this.#messageCacheSize = Math.max(1, options.messageCacheSize ?? 1_000);
+    this.#groupMetadataCacheEnabled = options.groupMetadataCache?.enabled !== false;
+    this.#groupMetadataCacheTtlMs = Math.max(1, options.groupMetadataCache?.ttlMs ?? 300_000);
+    this.#groupMetadataCacheSize = Math.max(1, options.groupMetadataCache?.maxEntries ?? 1_000);
   }
 
   on<Event extends keyof ProviderEvents>(
@@ -106,6 +131,7 @@ export class BaileysProvider implements WhatsAppProvider {
         markOnlineOnConnect: false,
         enableAutoSessionRecreation: true,
         enableRecentMessageCache: true,
+        cachedGroupMetadata: async (jid) => this.#getGroupMetadata(jid),
         getMessage: async (key) => this.#messageStore.get(this.#messageStoreKey(key))?.message ?? undefined,
       });
       this.#socket = socket;
@@ -261,7 +287,7 @@ export class BaileysProvider implements WhatsAppProvider {
   }
 
   async getGroup(groupId: string): Promise<GroupSnapshot> {
-    const metadata = await this.#requireSocket().groupMetadata(groupId);
+    const metadata = await this.#getGroupMetadata(groupId);
     return {
       id: metadata.id,
       subject: metadata.subject,
@@ -284,6 +310,7 @@ export class BaileysProvider implements WhatsAppProvider {
   async setGroupAccess(groupId: string, access: GroupAccess): Promise<void> {
     const setting = access === 'closed' ? 'announcement' : 'not_announcement';
     await this.#requireSocket().groupSettingUpdate(groupId, setting);
+    this.#invalidateGroupMetadata(groupId);
   }
 
   async getGroupInviteCode(groupId: string): Promise<string> {
@@ -323,6 +350,7 @@ export class BaileysProvider implements WhatsAppProvider {
   ): Promise<ParticipantUpdateResult> {
     const [result] = await this.#requireSocket()
       .groupParticipantsUpdate(groupId, [memberId], action);
+    this.#invalidateGroupMetadata(groupId);
     const status = result?.status ?? 'unknown';
     return {
       success: status === '200',
@@ -366,11 +394,15 @@ export class BaileysProvider implements WhatsAppProvider {
 
     socket.ev.on('groups.update', (groups) => {
       for (const group of groups) {
-        if (group.id) void this.#events.emit('groupChanged', { groupId: group.id });
+        if (group.id) {
+          this.#invalidateGroupMetadata(group.id);
+          void this.#events.emit('groupChanged', { groupId: group.id });
+        }
       }
     });
 
     socket.ev.on('group-participants.update', (update) => {
+      this.#invalidateGroupMetadata(update.id);
       const change = this.#groupParticipantsChanged(update);
       void this.#events.emit('groupParticipantsChanged', change);
       const { id } = update;
@@ -611,6 +643,62 @@ export class BaileysProvider implements WhatsAppProvider {
       const oldest = this.#messageStore.keys().next().value as string | undefined;
       if (oldest) this.#messageStore.delete(oldest);
     }
+  }
+
+  async #getGroupMetadata(groupId: string): Promise<GroupMetadata> {
+    if (this.#groupMetadataCacheEnabled) {
+      const cached = this.#groupMetadataCache.get(groupId);
+
+      if (cached && cached.expiresAt > Date.now()) {
+        this.#groupMetadataCache.delete(groupId);
+        this.#groupMetadataCache.set(groupId, cached);
+        return cached.value;
+      }
+
+      if (cached) this.#groupMetadataCache.delete(groupId);
+    }
+
+    const generation = this.#groupMetadataGenerations.get(groupId) ?? 0;
+    const pending = this.#groupMetadataRequests.get(groupId);
+    if (pending?.generation === generation) return pending.promise;
+
+    const request = this.#requireSocket().groupMetadata(groupId);
+    const requestEntry = { generation, promise: request };
+    this.#groupMetadataRequests.set(groupId, requestEntry);
+
+    try {
+      const metadata = await request;
+      if ((this.#groupMetadataGenerations.get(groupId) ?? 0) === generation) {
+        this.#rememberGroupMetadata(groupId, metadata);
+      }
+      return metadata;
+    } finally {
+      if (this.#groupMetadataRequests.get(groupId) === requestEntry) {
+        this.#groupMetadataRequests.delete(groupId);
+      }
+    }
+  }
+
+  #rememberGroupMetadata(groupId: string, metadata: GroupMetadata): void {
+    if (!this.#groupMetadataCacheEnabled) return;
+
+    this.#groupMetadataCache.delete(groupId);
+    this.#groupMetadataCache.set(groupId, {
+      value: metadata,
+      expiresAt: Date.now() + this.#groupMetadataCacheTtlMs,
+    });
+
+    while (this.#groupMetadataCache.size > this.#groupMetadataCacheSize) {
+      const oldest = this.#groupMetadataCache.keys().next().value as string | undefined;
+      if (oldest === undefined) return;
+      this.#groupMetadataCache.delete(oldest);
+    }
+  }
+
+  #invalidateGroupMetadata(groupId: string): void {
+    this.#groupMetadataCache.delete(groupId);
+    const generation = this.#groupMetadataGenerations.get(groupId) ?? 0;
+    this.#groupMetadataGenerations.set(groupId, generation + 1);
   }
 
   #messageStoreKey(

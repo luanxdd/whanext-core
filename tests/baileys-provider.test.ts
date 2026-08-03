@@ -136,6 +136,43 @@ describe('BaileysProvider pairing', () => {
     });
   });
 
+  it('feeds bounded group metadata cache into Baileys message sending', async () => {
+    const provider = new BaileysProvider({ auth: './session', browser: Browser.Windows });
+    await provider.connect();
+    const options = mocks.socketOptions[0] as {
+      cachedGroupMetadata(jid: string): Promise<unknown>;
+    };
+
+    const [first, second, third] = await Promise.all([
+      options.cachedGroupMetadata('123@g.us'),
+      options.cachedGroupMetadata('123@g.us'),
+      options.cachedGroupMetadata('123@g.us'),
+    ]);
+    const fourth = await options.cachedGroupMetadata('123@g.us');
+
+    expect(first).toBe(second);
+    expect(second).toBe(third);
+    expect(third).toBe(fourth);
+    expect(mocks.socket.groupMetadata).toHaveBeenCalledOnce();
+  });
+
+  it('invalidates provider metadata when a group event arrives', async () => {
+    const provider = new BaileysProvider({ auth: './session', browser: Browser.Windows });
+    await provider.connect();
+    const options = mocks.socketOptions[0] as {
+      cachedGroupMetadata(jid: string): Promise<unknown>;
+    };
+    const emitGroups = mocks.handlers.get('groups.update') as
+      | ((groups: Array<{ id: string }>) => void)
+      | undefined;
+
+    await options.cachedGroupMetadata('123@g.us');
+    emitGroups?.([{ id: '123@g.us' }]);
+    await options.cachedGroupMetadata('123@g.us');
+
+    expect(mocks.socket.groupMetadata).toHaveBeenCalledTimes(2);
+  });
+
   it('routes sanitized provider logs through the public logger', async () => {
     const entries: LogEntry[] = [];
     const logger = new Logger({

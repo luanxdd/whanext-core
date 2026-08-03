@@ -2,6 +2,48 @@
 
 Todas as mudanças relevantes do projeto serão registradas neste arquivo.
 
+## 0.10.0
+
+### Adicionado
+
+- `CommandContext`, uma interação enriquecida que continua compatível com o modelo `Message` legado.
+- `ctx.reply()`, `ctx.defer()`, `ctx.edit()`, `ctx.react()`, `ctx.unreact()`, `ctx.delete()` e respostas com exclusão programada.
+- `option.string`, `number`, `boolean`, `enum`, `user` e `duration`, com inferência de tipos, obrigatoriedade e validações.
+- `defineCommandGroup()` e `defineSubcommand()` para comandos como `&grupo abrir` e `&grupo fechar`.
+- Guards reutilizáveis para grupo, privado, admin, bot admin e regras customizadas.
+- Middleware global e por comando, além de hooks `beforeExecute`, `afterExecute` e `onError`.
+- Cooldown por usuário, chat, usuário+chat ou global, com limpeza automática de entradas expiradas.
+- Controle de concorrência com estratégias `parallel`, `reject`, `queue` e `replace`.
+- `app.commands`, catálogo consultável, categorias, busca e help gerado por metadados.
+- Localizações de nome, aliases e descrição sem duplicar definições.
+- Códigos de erro `COMMAND_COOLDOWN` e `COMMAND_BUSY`.
+
+### Compatibilidade
+
+- `app.router()` continua retornando o mesmo router disponível em `app.commands`.
+- `onlyGroup`, `onlyPrivate`, `onlyAdmin` e `botMustBeAdmin` continuam suportados.
+- Comandos legados com `execute(message, args)` continuam funcionando sem alteração.
+- `loadCommands()` agora também reconhece grupos de comandos.
+
+## 0.9.0
+
+### Alterado
+
+- Baileys atualizado de `7.0.0-rc13` para `7.0.0-rc14`.
+- O provider agora fornece `cachedGroupMetadata` ao Baileys, evitando consultas redundantes ao WhatsApp no fan-out de mensagens em grupos.
+- O cache interno usado pelo envio possui TTL, LRU limitado, deduplicação de buscas concorrentes e proteção contra a reinserção de resultados invalidados durante uma busca.
+- `MemoryCache` agora promove corretamente chaves sobrescritas na ordem LRU.
+
+### Adicionado
+
+- `MemoryCache.stats()` para observar hits, misses, sets, evictions e expirations.
+- `MemoryCache.prune()` para remover entradas expiradas de forma explícita.
+
+### Compatibilidade
+
+- Nenhuma alteração é necessária nos comandos ou na API pública existente.
+- Sessões criadas pela v0.8 continuam compatíveis; o auth state multifile do Baileys 7 já persiste as chaves de LID, device list e TC token exigidas pela migração.
+
 ## 0.8.0
 
 ### Adicionado

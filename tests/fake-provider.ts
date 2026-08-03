@@ -24,6 +24,7 @@ export class FakeProvider implements WhatsAppProvider {
   readonly rejectedCalls: Array<{ callId: string; from: string }> = [];
   readonly downloadedMedia: MessageKey[] = [];
   readonly reactions: Array<{ key: MessageKey; emoji?: string }> = [];
+  readonly edited: Array<{ key: MessageKey; text: string }> = [];
   readonly calls = {
     getGroup: 0,
     setGroupAccess: 0,
@@ -100,7 +101,8 @@ export class FakeProvider implements WhatsAppProvider {
     };
   }
 
-  async editMessage(key: MessageKey): Promise<SentMessage> {
+  async editMessage(key: MessageKey, text: string): Promise<SentMessage> {
+    this.edited.push({ key, text });
     return { id: key.id, chatId: key.chatId, keys: key, timestamp: new Date() };
   }
 

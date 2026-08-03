@@ -401,6 +401,137 @@ const app = await create({
 
 ## Comandos
 
+O sistema moderno usa um contexto semelhante às interactions do Discord. `ctx` contém a mensagem normalizada, usuário, chat, grupo, services, options, sinal de cancelamento e helpers de resposta.
+
+```ts
+import {
+  defineCommand,
+  guards,
+  option,
+} from '@whanext/core';
+
+app.commands.command(
+  defineCommand({
+    name: 'ban',
+    aliases: ['banir'],
+    description: 'Remove um membro do grupo.',
+    category: 'moderação',
+
+    guards: [
+      guards.group(),
+      guards.userAdmin(),
+      guards.botAdmin(),
+    ],
+
+    options: {
+      user: option.user({
+        description: 'Usuário que será removido.',
+        required: true,
+      }),
+      reason: option.string({
+        description: 'Motivo da remoção.',
+        rest: true,
+      }),
+    },
+
+    cooldown: {
+      durationMs: 5_000,
+      scope: 'user-chat',
+    },
+
+    concurrency: {
+      scope: 'chat',
+      max: 1,
+      strategy: 'queue',
+    },
+
+    async execute(ctx) {
+      const user = ctx.options.user('user');
+      const reason = ctx.options.string('reason') ?? 'Não informado';
+      const deferred = await ctx.defer('⏳ _Processando banimento..._');
+      const result = await ctx.members.remove(ctx.chatId, user);
+
+      await deferred.edit(
+        result.changed
+          ? `🔨 *Usuário banido*\n\n${user.mention} foi removido.\n• *Motivo:* ${reason}`
+          : `⚠️ O usuário não está mais no grupo.`,
+      );
+    },
+  }),
+);
+```
+
+### Subcomandos
+
+```ts
+import {
+  defineCommandGroup,
+  defineSubcommand,
+  guards,
+} from '@whanext/core';
+
+app.commands.command(defineCommandGroup({
+  name: 'grupo',
+  aliases: ['group'],
+  description: 'Gerencia o grupo.',
+  category: 'grupos',
+  guards: [guards.group(), guards.userAdmin(), guards.botAdmin()],
+
+  subcommands: [
+    defineSubcommand({
+      name: 'abrir',
+      aliases: ['open'],
+      description: 'Abre o grupo.',
+      async execute(ctx) {
+        await ctx.groups.open(ctx.chatId);
+        await ctx.reply('🔓 *Grupo aberto*');
+      },
+    }),
+    defineSubcommand({
+      name: 'fechar',
+      aliases: ['close'],
+      description: 'Fecha o grupo.',
+      async execute(ctx) {
+        await ctx.groups.close(ctx.chatId);
+        await ctx.reply('🔒 *Grupo fechado*');
+      },
+    }),
+  ],
+}));
+```
+
+Isso aceita `&grupo abrir`, `&group open`, `&grupo fechar` e `&group close` sem duplicar lógica.
+
+### Middleware e erros
+
+```ts
+app.commands.use(async (ctx, next) => {
+  const startedAt = performance.now();
+  await next();
+  app.logger.debug('Command completed', {
+    command: ctx.command.path.join(' '),
+    durationMs: performance.now() - startedAt,
+  });
+});
+
+app.commands.onError(async (ctx, error) => {
+  if (error.code === 'COMMAND_COOLDOWN') {
+    await ctx.reply('⏱️ Aguarde um pouco antes de usar novamente.');
+    return;
+  }
+
+  await ctx.reply('⚠️ *Não foi possível concluir*');
+});
+```
+
+`app.commands.catalog()`, `categories()`, `find()`, `has()` e `values()` expõem a coleção registrada. `app.commands.help(ctx, { category: 'moderação' })` gera a ajuda usando descrição, usage, opções e visibilidade dos comandos.
+
+Detalhes completos estão em [Comandos modernos](./docs/commands-v0.10.md).
+
+### API legada
+
+Comandos existentes continuam válidos:
+
 ```ts
 app.router().command(
   defineCommand({
@@ -524,11 +655,32 @@ const app = await create({
 
 O cache padrão vive na instância do app, usa LRU limitado e elimina entradas expiradas durante as leituras. Consultas simultâneas dos mesmos metadados são agrupadas em uma única chamada ao WhatsApp. Eventos e mutações de grupo invalidam automaticamente entradas relacionadas.
 
+Os mesmos metadados também alimentam internamente o `cachedGroupMetadata` do Baileys. Em grupos já aquecidos, isso remove a consulta de metadados do caminho de envio; mensagens continuam aguardando somente criptografia, upload quando houver mídia e confirmação da rede.
+
+Para observar um `MemoryCache` criado diretamente:
+
+```ts
+import { MemoryCache } from '@whanext/core';
+
+const cache = new MemoryCache({ maxEntries: 5_000 });
+
+console.log(cache.stats());
+cache.prune();
+```
+
+`stats()` informa `size`, `maxEntries`, `hits`, `misses`, `sets`, `evictions` e `expirations`.
+
+Para uma única instância, o cache padrão é suficiente mesmo com muitos grupos, desde que `memoryMaxEntries` seja dimensionado. Em várias instâncias/processos, use um `CacheStore` distribuído para o cache público; cada conexão mantém ainda um L1 local limitado para o caminho criptográfico do Baileys. Não compartilhe uma mesma sessão ativa entre processos.
+
 O cache interno de mensagens mantém até 1.000 mensagens por padrão para replies, reenvios do provider e downloads de mídia. Ajuste quando necessário:
 
 ```ts
 const app = await create({ messageCacheSize: 2_000 });
 ```
+
+Não há delay artificial no envio. Presença é enviada diretamente e previews de alta qualidade permanecem desativados no provider; mídias ainda dependem do tempo de leitura, criptografia e upload ao WhatsApp.
+
+Para limites, dimensionamento e decisões de produção, consulte [Desempenho e escala](./docs/performance-and-scale.md).
 
 ## Presença
 

@@ -120,10 +120,14 @@ async function importCommands(filePath: string): Promise<CommandDefinition[]> {
 }
 
 function isCommandDefinition(value: unknown): value is CommandDefinition {
+  const candidate = value as Partial<CommandDefinition> & { subcommands?: unknown };
   return (
     typeof value === 'object'
     && value !== null
-    && typeof (value as CommandDefinition).name === 'string'
-    && typeof (value as CommandDefinition).execute === 'function'
+    && typeof candidate.name === 'string'
+    && (
+      typeof (candidate as { execute?: unknown }).execute === 'function'
+      || Array.isArray(candidate.subcommands)
+    )
   );
 }

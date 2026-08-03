@@ -40,6 +40,14 @@ export async function create(options: CreateOptions = {}): Promise<WhaNextApp> {
     ...(options.messageCacheSize !== undefined
       ? { messageCacheSize: options.messageCacheSize }
       : {}),
+    groupMetadataCache: {
+      ...(options.cache?.groupTtlMs !== undefined
+        ? { ttlMs: options.cache.groupTtlMs }
+        : {}),
+      ...(options.cache?.memoryMaxEntries !== undefined
+        ? { maxEntries: options.cache.memoryMaxEntries }
+        : {}),
+    },
     ...(options.reconnect ? { reconnect: options.reconnect } : {}),
   });
 

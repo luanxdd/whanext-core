@@ -1,6 +1,6 @@
 {
   "name": "@whanext/core",
-  "version": "0.8.0",
+  "version": "0.10.0",
   "description": "A modern, high-level WhatsApp SDK for TypeScript with commands, groups, media, moderation and structured logging.",
   "type": "module",
   "sideEffects": false,
@@ -36,7 +36,7 @@
     "node": ">=22.5.0"
   },
   "dependencies": {
-    "@whiskeysockets/baileys": "7.0.0-rc13"
+    "@whiskeysockets/baileys": "7.0.0-rc14"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",

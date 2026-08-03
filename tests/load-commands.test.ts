@@ -95,6 +95,21 @@ describe('loadCommands', () => {
     expect(registrar.registered.map((command) => command.name)).toEqual(['mute', 'unmute']);
   });
 
+  it('registers command groups that contain subcommands', async () => {
+    await writeFile(
+      path.join(dir, 'group.mjs'),
+      [
+        "const close = { name: 'close', description: 'close', execute: () => {} };",
+        "export default { name: 'group', description: 'group', subcommands: [close] };",
+      ].join('\n'),
+    );
+
+    const registrar = new FakeRegistrar();
+    await loadCommands(registrar, dir);
+
+    expect(registrar.registered.map((command) => command.name)).toEqual(['group']);
+  });
+
   it('ignores auxiliary exports when the file contains commands', async () => {
     await writeFile(
       path.join(dir, 'ping.mjs'),

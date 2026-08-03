@@ -2,6 +2,10 @@ import {
   Browser,
   create,
   defineCommand,
+  defineCommandGroup,
+  defineSubcommand,
+  guards,
+  option,
   type LogFormat,
   type LogLevel,
 } from '@whanext/core';
@@ -29,6 +33,62 @@ const app = await create({
     database: process.env.DATABASE_PATH ?? './data/whanext.sqlite',
   },
 });
+
+app.commands.onError(async (ctx, error) => {
+  if (error.code === 'COMMAND_COOLDOWN') {
+    await ctx.reply('⏱️ Aguarde um pouco antes de usar esse comando novamente.');
+    return;
+  }
+
+  await ctx.reply('⚠️ *Não foi possível concluir*');
+});
+
+app.commands.command(defineCommandGroup({
+  name: 'grupo',
+  aliases: ['group'],
+  description: 'Gerencia configurações do grupo.',
+  category: 'grupos',
+  guards: [guards.group(), guards.userAdmin(), guards.botAdmin()],
+  concurrency: { strategy: 'queue', scope: 'chat', max: 1 },
+  subcommands: [
+    defineSubcommand({
+      name: 'abrir',
+      aliases: ['open'],
+      description: 'Abre o grupo.',
+      async execute(ctx) {
+        const result = await ctx.groups.open(ctx.chatId);
+        await ctx.reply(result.changed ? '🔓 *Grupo aberto*' : '⚠️ O grupo já está aberto.');
+      },
+    }),
+    defineSubcommand({
+      name: 'fechar',
+      aliases: ['close'],
+      description: 'Fecha o grupo.',
+      async execute(ctx) {
+        const result = await ctx.groups.close(ctx.chatId);
+        await ctx.reply(result.changed ? '🔒 *Grupo fechado*' : '⚠️ O grupo já está fechado.');
+      },
+    }),
+    defineSubcommand({
+      name: 'promover',
+      aliases: ['promote'],
+      description: 'Promove um membro.',
+      options: {
+        user: option.user({ description: 'Membro.', required: true }),
+      },
+      async execute(ctx) {
+        const user = ctx.options.user('user');
+        const result = await ctx.members.promote(ctx.chatId, user);
+        await ctx.reply({
+          text: result.changed
+            ? `🛡️ *Usuário promovido*\n\n${user.mention} agora é administrador.`
+            : `⚠️ ${user.mention} já é administrador.`,
+          mentions: [user],
+        });
+      },
+    }),
+  ],
+}));
 
 app.router()
   .command(

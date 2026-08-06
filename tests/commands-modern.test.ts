@@ -77,6 +77,24 @@ describe('modern commands', () => {
     expect(provider.reactions[0]?.emoji).toBe('🔨');
   });
 
+  it('exposes the command catalog and prefix inside command context', async () => {
+    const provider = new FakeProvider();
+    const app = await create({ provider, prefix: '&' });
+
+    app.commands.command(defineCommand({
+      name: 'menu',
+      description: 'Menu.',
+      async execute(ctx) {
+        expect(ctx.prefix).toBe('&');
+        expect(ctx.commands.prefix).toBe('&');
+        expect(ctx.commands.has('menu')).toBe(true);
+        expect(ctx.commands.catalog().map((entry) => entry.path.join(' '))).toContain('menu');
+      },
+    }));
+
+    await provider.events.emit('message', makeMessage('&menu'));
+  });
+
   it('dispatches command groups, subcommands and Portuguese/English aliases', async () => {
     const provider = new FakeProvider();
     const app = await create({ provider, prefix: '&' });

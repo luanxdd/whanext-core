@@ -1,5 +1,15 @@
 # Changelog
 
+
+## 0.11.0 - Command discovery
+
+- `CommandRouter.load()` carrega diretórios de comandos diretamente pelo router.
+- `loadCommands()` agora aceita `URL` além de caminhos em string.
+- Autoload reconhece `.ts`, `.mts` e `.cts` por padrão, além de JavaScript.
+- `CommandContext` agora expõe `ctx.commands` (catálogo somente-leitura) e `ctx.prefix`.
+- Menus e comandos de ajuda podem consultar o catálogo sem factory ou referência global ao app.
+- Mantém compatibilidade com `defineCommand`, `defineCommands`, `defineSubcommand` e `defineCommandGroup`.
+
 Todas as mudanças relevantes do projeto serão registradas neste arquivo.
 
 ## 0.10.0

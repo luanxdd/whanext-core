@@ -14,6 +14,7 @@ import {
   type CommandContext,
   type CommandRuntimeServices,
 } from '@/commands/context.js';
+import { loadCommands, type LoadCommandsOptions, type LoadCommandsResult } from '@/commands/load-commands.js';
 import type { CommandGuard, GuardResult } from '@/commands/guards.js';
 import {
   ParsedCommandOptions,
@@ -130,6 +131,10 @@ export class CommandRouter {
     return this;
   }
 
+  load(dirPath: string | URL, options: LoadCommandsOptions = {}): Promise<LoadCommandsResult> {
+    return loadCommands(this, dirPath, options);
+  }
+
   use(middleware: CommandMiddleware): this {
     this.#globalMiddleware.push(middleware);
     return this;
@@ -227,6 +232,7 @@ export class CommandRouter {
         options: new ParsedCommandOptions({}),
         args: new ArgsParser(tokens),
         services: this.#services,
+        commands: this,
         signal: new AbortController().signal,
         ...(root.locale ? { locale: root.locale } : {}),
       });
@@ -274,6 +280,7 @@ export class CommandRouter {
             options: parsedOptions,
             args: legacyArgs,
             services: this.#services,
+            commands: this,
             signal,
             ...(resolved.locale ? { locale: resolved.locale } : {}),
           });
@@ -295,6 +302,7 @@ export class CommandRouter {
         options: new ParsedCommandOptions({}),
         args: legacyArgs,
         services: this.#services,
+        commands: this,
         signal: new AbortController().signal,
         ...(resolved.locale ? { locale: resolved.locale } : {}),
       });

@@ -41,6 +41,7 @@ export {
 } from '@/commands/command.js';
 export {
   DeferredReply,
+  type CommandCatalogView,
   type CommandChatContext,
   type CommandContext,
   type CommandGroupContext,

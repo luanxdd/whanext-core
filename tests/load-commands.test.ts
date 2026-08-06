@@ -1,6 +1,7 @@
 import { mkdtemp, rm, writeFile, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import {
   afterEach,
   beforeEach,
@@ -9,10 +10,12 @@ import {
   it,
 } from 'vitest';
 import {
+  create,
   loadCommands,
   WhaNextError,
   type CommandDefinition,
 } from '@/index.js';
+import { FakeProvider } from './fake-provider.js';
 
 class FakeRegistrar {
   readonly registered: CommandDefinition[] = [];
@@ -164,7 +167,17 @@ describe('loadCommands', () => {
     expect(result.skipped).toEqual([path.join(dir, 'notes.md')]);
   });
 
-  it('does not load ts files unless explicitly enabled', async () => {
+  it('skips TypeScript declaration files', async () => {
+    await writeFile(path.join(dir, 'types.d.ts'), 'export interface Helper {}');
+
+    const registrar = new FakeRegistrar();
+    const result = await loadCommands(registrar, dir);
+
+    expect(registrar.registered).toHaveLength(0);
+    expect(result.skipped).toEqual([path.join(dir, 'types.d.ts')]);
+  });
+
+  it('loads ts files by default for TypeScript runtimes', async () => {
     await writeFile(
       path.join(dir, 'mute.ts'),
       "export default { name: 'mute', description: 'mute', execute: () => {} };",
@@ -173,8 +186,33 @@ describe('loadCommands', () => {
     const registrar = new FakeRegistrar();
     const result = await loadCommands(registrar, dir);
 
-    expect(registrar.registered).toHaveLength(0);
-    expect(result.skipped).toEqual([path.join(dir, 'mute.ts')]);
+    expect(registrar.registered.map((command) => command.name)).toEqual(['mute']);
+    expect(result.loaded).toEqual([path.join(dir, 'mute.ts')]);
+  });
+
+  it('loads commands directly from app.commands', async () => {
+    await writeFile(
+      path.join(dir, 'ping.mjs'),
+      "export default { name: 'ping', description: 'ping', execute: () => {} };",
+    );
+
+    const app = await create({ provider: new FakeProvider(), prefix: '&' });
+    const result = await app.commands.load(pathToFileURL(`${dir}${path.sep}`));
+
+    expect(app.commands.has('ping')).toBe(true);
+    expect(result.commands.map((command) => command.name)).toEqual(['ping']);
+  });
+
+  it('accepts a file URL as the commands directory', async () => {
+    await writeFile(
+      path.join(dir, 'ping.mjs'),
+      "export default { name: 'ping', description: 'ping', execute: () => {} };",
+    );
+
+    const registrar = new FakeRegistrar();
+    await loadCommands(registrar, pathToFileURL(`${dir}${path.sep}`));
+
+    expect(registrar.registered.map((command) => command.name)).toEqual(['ping']);
   });
 
   it('throws a WhaNextError when a file does not export a valid command', async () => {

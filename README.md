@@ -566,80 +566,82 @@ Restrições disponíveis:
 
 `ArgsParser` possui `string`, `number`, `boolean`, `enum`, `user`, `duration`, `peek`, `skip` e `rest`. `args.user()` retorna `User`, nunca uma string crua.
 
-### Carregando comandos de uma pasta
+### Descoberta automática de comandos
 
-`loadCommands` importa e registra todos os comandos de um diretório, sem precisar listar cada arquivo manualmente. Um arquivo pode conter um ou vários comandos:
+A forma recomendada agora é deixar cada arquivo de comando autossuficiente e pedir ao próprio router para descobrir a árvore inteira. Não é necessário manter `index.ts` por pasta nem um arquivo central de imports:
 
 ```ts
-import { loadCommands } from '@whanext/core';
+const app = await create({ prefix: '&' });
 
-await loadCommands(app.router(), './commands');
+await app.commands.load(new URL('./commands/', import.meta.url));
 ```
 
-Para um comando por arquivo, continue usando `defineCommand` normalmente:
+O mesmo código funciona em desenvolvimento TypeScript (com um runtime/loader como `tsx`) e depois do build: o loader reconhece `.ts`, `.mts`, `.cts`, `.js`, `.mjs` e `.cjs` por padrão. O diretório é percorrido recursivamente.
+
+```text
+src/commands/
+├── admin/
+│   ├── ban.ts
+│   ├── mute.ts
+│   └── warn.ts
+├── group/
+│   ├── access.ts
+│   └── pin.ts
+└── general/
+    ├── menu.ts
+    └── profile.ts
+```
+
+Um arquivo pode exportar um comando:
 
 ```ts
-// commands/ping.js
 export default defineCommand({
   name: 'ping',
   description: 'Responde pong.',
-  async execute(message) {
-    await app.message.reply(message, 'pong');
+  async execute(ctx) {
+    await ctx.reply('pong');
   },
 });
 ```
 
-Para manter comandos relacionados juntos, use `defineCommands`. Esse é o formato recomendado para módulos com vários comandos:
-
-```ts
-// commands/moderation.ts
-import { defineCommand, defineCommands } from '@whanext/core';
-
-const mute = defineCommand({
-  name: 'mute',
-  description: 'Silencia um membro.',
-  async execute(message, args) {
-    // ...
-  },
-});
-
-const unmute = defineCommand({
-  name: 'unmute',
-  description: 'Remove o silêncio de um membro.',
-  async execute(message, args) {
-    // ...
-  },
-});
-
-export default defineCommands(mute, unmute);
-```
-
-Vários exports nomeados também são descobertos automaticamente:
+Ou vários comandos relacionados no mesmo módulo:
 
 ```ts
 export const mute = defineCommand({ /* ... */ });
 export const unmute = defineCommand({ /* ... */ });
 ```
 
-Exports auxiliares, como constantes e metadados, são ignorados quando o módulo contém ao menos um comando válido. Se o mesmo objeto de comando aparecer em uma coleção e em um export nomeado, ele será registrado apenas uma vez.
+Também é possível exportar uma coleção com `defineCommands(...)`. Exports auxiliares são ignorados quando o módulo contém pelo menos um comando válido, e o mesmo objeto não é registrado duas vezes.
 
-Por padrão, `loadCommands` procura arquivos `.js`, `.mjs` e `.cjs`, incluindo subpastas. Extensões como `.ts` não são carregadas por padrão, já que o `import()` dinâmico depende de um loader do TypeScript já estar ativo no processo (`tsx`, `ts-node` ou similar); habilite explicitamente quando esse loader existir:
-
-```ts
-await loadCommands(app.router(), './commands', { extensions: ['.ts'] });
-```
-
-`loadCommands` também aceita qualquer objeto com um método `command()`, não apenas o router retornado por `app.router()`.
-
-O retorno informa os arquivos carregados e ignorados, além de cada comando registrado:
+Para menus dinâmicos, `CommandContext` expõe uma visão somente-leitura do catálogo e o prefixo atual:
 
 ```ts
-const result = await loadCommands(app.router(), './commands');
+export default defineCommand({
+  name: 'menu',
+  description: 'Mostra os comandos.',
+  async execute(ctx) {
+    const commands = ctx.commands.catalog({ category: 'administração' });
+    const lines = commands.map((command) =>
+      `${ctx.prefix}${command.path.join(' ')} — ${command.definition.description}`,
+    );
 
-console.log(result.loaded);   // arquivos importados
-console.log(result.skipped);  // extensões não habilitadas
-console.log(result.commands); // { name, filePath }[]
+    await ctx.reply(lines.join('\n'));
+  },
+});
 ```
+
+`ctx.commands` fornece `catalog()`, `categories()`, `find()`, `has()`, `size` e `prefix`; ele não expõe detalhes internos do provider.
+
+Se for necessário controlar extensões ou recursão:
+
+```ts
+await app.commands.load(new URL('./commands/', import.meta.url), {
+  recursive: true,
+  extensions: ['.ts'],
+});
+```
+
+`loadCommands(registrar, directory, options)` continua disponível como API de baixo nível para registradores customizados. O retorno contém arquivos carregados/ignorados e os comandos descobertos.
 
 ## Cache externo
 

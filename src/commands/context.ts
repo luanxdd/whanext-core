@@ -19,6 +19,15 @@ import type { MemberService } from '@/services/member-service.js';
 import type { MessageService } from '@/services/message-service.js';
 import type { UserService } from '@/services/user-service.js';
 
+export interface CommandCatalogView {
+  readonly prefix: string;
+  readonly size: number;
+  catalog(options?: { category?: string; includeHidden?: boolean }): readonly RegisteredCommand[];
+  categories(): readonly string[];
+  has(path: string): boolean;
+  find(path: string): RegisteredCommand | undefined;
+}
+
 export interface CommandRuntimeServices {
   messages: MessageService;
   media: MediaService;
@@ -52,6 +61,8 @@ export interface CommandContext<Schema extends CommandOptionSchema = CommandOpti
   readonly chat: CommandChatContext;
   readonly group: CommandGroupContext | undefined;
   readonly command: RegisteredCommand;
+  readonly commands: CommandCatalogView;
+  readonly prefix: string;
   readonly options: ParsedCommandOptions<Schema>;
   readonly args: ArgsParser;
   readonly locale: string | undefined;
@@ -80,6 +91,7 @@ interface CreateCommandContextOptions<Schema extends CommandOptionSchema> {
   options: ParsedCommandOptions<Schema>;
   args: ArgsParser;
   services: CommandRuntimeServices;
+  commands: CommandCatalogView;
   signal: AbortSignal;
   locale?: string;
 }
@@ -90,6 +102,8 @@ class CommandContextImplementation<Schema extends CommandOptionSchema> {
   readonly chat: CommandChatContext;
   readonly group: CommandGroupContext | undefined;
   readonly command: RegisteredCommand;
+  readonly commands: CommandCatalogView;
+  readonly prefix: string;
   readonly options: ParsedCommandOptions<Schema>;
   readonly args: ArgsParser;
   readonly locale: string | undefined;
@@ -109,6 +123,8 @@ class CommandContextImplementation<Schema extends CommandOptionSchema> {
     this.user = options.message.sender;
     this.chat = { id: options.message.chatId, isGroup: options.message.isGroup };
     this.command = options.command;
+    this.commands = options.commands;
+    this.prefix = options.commands.prefix;
     this.options = options.options;
     this.args = options.args;
     this.locale = options.locale;

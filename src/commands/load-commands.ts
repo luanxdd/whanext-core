@@ -1,7 +1,7 @@
 import type { Dirent } from 'node:fs';
 import { readdir } from 'node:fs/promises';
 import path from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import type { CommandDefinition } from '@/commands/command.js';
 import { WhaNextError } from '@/errors/error.js';
@@ -26,23 +26,24 @@ export interface LoadedCommand {
   filePath: string;
 }
 
-const DEFAULT_EXTENSIONS = ['.js', '.mjs', '.cjs'] as const;
+const DEFAULT_EXTENSIONS = ['.js', '.mjs', '.cjs', '.ts', '.mts', '.cts'] as const;
 
 export async function loadCommands(
   registrar: CommandRegistrar,
-  dirPath: string,
+  dirPath: string | URL,
   options: LoadCommandsOptions = {},
 ): Promise<LoadCommandsResult> {
   const extensions = options.extensions ?? DEFAULT_EXTENSIONS;
   const recursive = options.recursive ?? true;
+  const resolvedDirPath = dirPath instanceof URL ? fileURLToPath(dirPath) : dirPath;
 
-  const entries = await readEntries(dirPath, recursive);
+  const entries = await readEntries(resolvedDirPath, recursive);
   const loaded: string[] = [];
   const skipped: string[] = [];
   const commands: LoadedCommand[] = [];
 
   for (const filePath of entries) {
-    if (!extensions.includes(path.extname(filePath))) {
+    if (isDeclarationFile(filePath) || !extensions.includes(path.extname(filePath))) {
       skipped.push(filePath);
       continue;
     }
@@ -130,4 +131,8 @@ function isCommandDefinition(value: unknown): value is CommandDefinition {
       || Array.isArray(candidate.subcommands)
     )
   );
+}
+
+function isDeclarationFile(filePath: string): boolean {
+  return /\.d\.(?:ts|mts|cts)$/.test(filePath);
 }

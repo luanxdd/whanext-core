@@ -18,6 +18,60 @@ import type {
 } from '@/models/message.js';
 import { User } from '@/models/user.js';
 
+/**
+ * Unwraps transport envelopes that may surround a WhatsApp payload.
+ *
+ * Baileys normally unwraps these through normalizeMessageContent(), but we
+ * intentionally handle the known envelopes as well. This keeps quoted
+ * view-once media reliable across Baileys payload variants.
+ */
+function unwrapMessageContent(
+  input: WAMessageContent | null | undefined,
+): WAMessageContent | undefined {
+  if (!input) return undefined;
+
+  const normalized = normalizeMessageContent(input);
+  const content = extractMessageContent(normalized);
+
+  if (!content) return undefined;
+
+  const nested = content.ephemeralMessage?.message
+    ?? content.viewOnceMessage?.message
+    ?? content.viewOnceMessageV2?.message
+    ?? content.viewOnceMessageV2Extension?.message;
+
+  return nested ? unwrapMessageContent(nested) : content;
+}
+
+/**
+ * Extracts a quoted payload from an incoming Baileys message as a synthetic
+ * WAMessage. Providers can cache this payload so media downloads still work
+ * even when the original view-once message is no longer present in the
+ * recent-message cache.
+ */
+export function extractQuotedBaileysMessage(input: WAMessage): WAMessage | undefined {
+  const chatId = input.key.remoteJid;
+  const content = unwrapMessageContent(input.message);
+
+  if (!chatId || !content) return undefined;
+
+  const type = getContentType(content);
+  const node = type ? content[type] : undefined;
+  const context = getContextInfo(node);
+
+  if (!context?.stanzaId || !context.quotedMessage) return undefined;
+
+  return {
+    key: {
+      id: context.stanzaId,
+      remoteJid: context.remoteJid ?? chatId,
+      fromMe: false,
+      ...(context.participant ? { participant: context.participant } : {}),
+    },
+    message: context.quotedMessage,
+  };
+}
+
 export function normalizeBaileysMessage(input: WAMessage): Message | undefined {
   const chatId = input.key.remoteJid;
   const id = input.key.id;
@@ -26,8 +80,7 @@ export function normalizeBaileysMessage(input: WAMessage): Message | undefined {
     return undefined;
   }
 
-  const normalized = normalizeMessageContent(input.message);
-  const content = extractMessageContent(normalized);
+  const content = unwrapMessageContent(input.message);
 
   if (!content) {
     return undefined;
@@ -212,8 +265,7 @@ function getQuoted(
   }
 
   const quoted = context.quotedMessage;
-  const normalized = normalizeMessageContent(quoted);
-  const content = extractMessageContent(normalized);
+  const content = unwrapMessageContent(quoted);
   const result: QuotedMessage = {
     key: {
       id: context.stanzaId,

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.13.1
+
+- Corrigido download de mídias para mensagens visualização única citadas, através do cache do payload citado carregado em `contextInfo`.
+- Adicionado desempacotamento explícito para envelopes de mensagens efêmeras e de visualização única, incluindo `viewOnceMessageV2Extension`.
+
 ## 0.13.0
 
 - Adicionado `MessageService.repost()` para republicar qualquer mensagem do WhatsApp recebida recentemente, sem criar uma resposta.

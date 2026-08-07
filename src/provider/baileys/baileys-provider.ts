@@ -34,6 +34,7 @@ import {
   createBaileysLogger,
 } from '@/provider/baileys/baileys-logger.js';
 import {
+  extractQuotedBaileysMessage,
   normalizeBaileysMessage,
   normalizeKey,
 } from '@/provider/baileys/normalize-message.js';
@@ -417,6 +418,10 @@ export class BaileysProvider implements WhatsAppProvider {
 
       for (const raw of messages) {
         if (raw.key.id && raw.message) this.#remember(raw);
+
+        const quoted = extractQuotedBaileysMessage(raw);
+        if (quoted?.key.id && quoted.message) this.#remember(quoted);
+
         const message = normalizeBaileysMessage(raw);
         if (message) void this.#events.emit('message', message);
       }

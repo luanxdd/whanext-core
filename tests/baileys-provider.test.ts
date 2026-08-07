@@ -343,6 +343,65 @@ describe('BaileysProvider pairing', () => {
     expect(mocks.downloadMediaMessage).toHaveBeenCalledOnce();
   });
 
+  it('downloads quoted view-once media from the payload carried by the reply', async () => {
+    const provider = new BaileysProvider({ auth: './session', browser: Browser.Windows });
+    await provider.connect();
+    const emitMessages = mocks.handlers.get('messages.upsert') as
+      | ((update: unknown) => void)
+      | undefined;
+
+    emitMessages?.({
+      type: 'notify',
+      messages: [{
+        key: {
+          id: 'command-1',
+          remoteJid: '123@g.us',
+          participant: '5511999999999@s.whatsapp.net',
+          fromMe: false,
+        },
+        message: {
+          extendedTextMessage: {
+            text: '&fig',
+            contextInfo: {
+              stanzaId: 'view-once-1',
+              participant: '5511888888888@s.whatsapp.net',
+              quotedMessage: {
+                viewOnceMessageV2Extension: {
+                  message: {
+                    imageMessage: {
+                      url: 'https://example.com/view-once',
+                      mimetype: 'image/jpeg',
+                      viewOnce: true,
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      }],
+    });
+
+    const media = await provider.downloadMedia({
+      id: 'view-once-1',
+      chatId: '123@g.us',
+      fromMe: false,
+      participantId: '5511888888888@s.whatsapp.net',
+    });
+
+    expect(media).toMatchObject({ kind: 'image', mimetype: 'image/jpeg' });
+    expect(media.data.toString()).toBe('media-bytes');
+    expect(mocks.downloadMediaMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        key: expect.objectContaining({ id: 'view-once-1', remoteJid: '123@g.us' }),
+        message: expect.objectContaining({ viewOnceMessageV2Extension: expect.any(Object) }),
+      }),
+      'buffer',
+      {},
+      expect.any(Object),
+    );
+  });
+
   it('normalizes participant changes received from the socket', async () => {
     const provider = new BaileysProvider({ auth: './session', browser: Browser.Windows });
     await provider.connect();

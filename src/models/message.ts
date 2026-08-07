@@ -14,6 +14,26 @@ export type MediaKind =
   | 'document'
   | 'sticker';
 
+/**
+ * High-level classification of the received WhatsApp message payload.
+ *
+ * `media.kind` remains the source of truth for downloadable media.
+ * `contentKind` additionally exposes non-media payloads such as locations,
+ * contacts, polls and catalog/product messages without leaking Baileys types.
+ */
+export type MessageContentKind =
+  | 'text'
+  | 'image'
+  | 'video'
+  | 'audio'
+  | 'document'
+  | 'sticker'
+  | 'location'
+  | 'contact'
+  | 'poll'
+  | 'catalog'
+  | 'unknown';
+
 export interface MessageMedia {
   kind: MediaKind;
   mimetype?: string;
@@ -50,6 +70,7 @@ export interface Message {
   isReply: boolean;
   isViewOnce: boolean;
   hasMedia: boolean;
+  contentKind?: MessageContentKind;
   media?: MessageMedia;
   quoted?: QuotedMessage;
 }

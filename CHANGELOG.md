@@ -1,6 +1,21 @@
 # Changelog
 
 
+## 0.12.0 - Message content classification
+
+### Adicionado
+
+- `Message.contentKind` para classificar o payload recebido sem expor tipos do Baileys.
+- Novo tipo público `MessageContentKind`.
+- Classificação nativa para texto, imagem, vídeo, áudio, documento, sticker, localização, contato, enquete e catálogo/produto.
+- `unknown` como fallback para formatos ainda não normalizados pela biblioteca.
+
+### Compatibilidade
+
+- `contentKind` é opcional no contrato público para manter compatibilidade com providers customizados e objetos `Message` criados por aplicações existentes.
+- O `BaileysProvider` oficial sempre preenche `contentKind` nas mensagens recebidas.
+- `message.media.kind` continua sendo a API indicada para mídia baixável; `contentKind` complementa essa API com tipos não-mídia.
+
 ## 0.11.0 - Command discovery
 
 - `CommandRouter.load()` carrega diretórios de comandos diretamente pelo router.

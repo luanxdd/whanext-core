@@ -10,6 +10,7 @@ import {
 import { uniqueIdentities } from '@/models/identity.js';
 import type {
   MediaKind,
+  MessageContentKind,
   Message,
   MessageKey,
   MessageMedia,
@@ -54,6 +55,7 @@ export function normalizeBaileysMessage(input: WAMessage): Message | undefined {
   const mentionedUsers = (context?.mentionedJid ?? []).map((identity) =>
     User.fromIdentities([identity]));
   const media = getMedia(type, node, Boolean(input.key.isViewOnce));
+  const contentKind = getContentKind(type);
   const text = getText(content);
   const caption = getCaption(content);
   const quoted = getQuoted(context, chatId);
@@ -73,6 +75,7 @@ export function normalizeBaileysMessage(input: WAMessage): Message | undefined {
     isReply: quoted !== undefined,
     isViewOnce: media?.viewOnce ?? false,
     hasMedia: media !== undefined,
+    contentKind,
   };
 
   if (senderJid !== undefined) message.senderJid = senderJid;
@@ -85,6 +88,45 @@ export function normalizeBaileysMessage(input: WAMessage): Message | undefined {
   if (media !== undefined) message.media = media;
   if (quoted !== undefined) message.quoted = quoted;
   return message;
+}
+
+function getContentKind(
+  type: keyof WAMessageContent | undefined,
+): MessageContentKind {
+  switch (String(type ?? '')) {
+    case 'conversation':
+    case 'extendedTextMessage':
+    case 'buttonsResponseMessage':
+    case 'listResponseMessage':
+    case 'templateButtonReplyMessage':
+      return 'text';
+    case 'imageMessage':
+      return 'image';
+    case 'videoMessage':
+      return 'video';
+    case 'audioMessage':
+      return 'audio';
+    case 'documentMessage':
+    case 'documentWithCaptionMessage':
+      return 'document';
+    case 'stickerMessage':
+      return 'sticker';
+    case 'locationMessage':
+    case 'liveLocationMessage':
+      return 'location';
+    case 'contactMessage':
+    case 'contactsArrayMessage':
+      return 'contact';
+    case 'pollCreationMessage':
+    case 'pollCreationMessageV2':
+    case 'pollCreationMessageV3':
+      return 'poll';
+    case 'productMessage':
+    case 'orderMessage':
+      return 'catalog';
+    default:
+      return 'unknown';
+  }
 }
 
 export function normalizeKey(key: WAMessageKey): MessageKey {

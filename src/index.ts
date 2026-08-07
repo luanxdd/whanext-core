@@ -117,6 +117,7 @@ export type {
   DownloadedMedia,
   ImageContent,
   MediaKind,
+  MessageContentKind,
   MediaSource,
   MentionTarget,
   Message,

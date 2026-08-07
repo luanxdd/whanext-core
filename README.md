@@ -220,6 +220,22 @@ if (app.isReady) {
 
 Toda mensagem possui `message.sender: User`. Menções ficam em `message.mentionedUsers`, e o remetente de um reply em `message.quoted?.sender`.
 
+O provider Baileys também classifica o payload em `message.contentKind`, sem exigir acesso aos tipos internos do Baileys ou download da mídia:
+
+```ts
+app.on('message', async (message) => {
+  if (message.contentKind === 'location') {
+    console.log('Localização recebida');
+  }
+
+  if (message.contentKind === 'poll') {
+    console.log('Enquete recebida');
+  }
+});
+```
+
+Os valores disponíveis são `text`, `image`, `video`, `audio`, `document`, `sticker`, `location`, `contact`, `poll`, `catalog` e `unknown`. Para mídia baixável, continue usando `message.media.kind`.
+
 ```ts
 app.on('message', async (message) => {
   console.log(message.sender.id);

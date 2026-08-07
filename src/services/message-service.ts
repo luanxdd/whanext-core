@@ -3,6 +3,7 @@ import type {
   Message,
   MessageContent,
   MessageKey,
+  RepostMessageOptions,
   SentMessage,
   TextContent,
 } from '@/models/message.js';
@@ -21,6 +22,20 @@ export class MessageService {
 
   reply(message: Message, content: MessageContent): Promise<SentMessage> {
     return this.#provider.sendMessage(message.chatId, content, message.keys);
+  }
+
+  /**
+   * Reposts a cached received message into a chat without creating a reply.
+   * The original payload is preserved by the provider, so this works for
+   * media and structured WhatsApp messages as well as text.
+   */
+  repost(
+    source: Message | MessageKey,
+    chatId: string,
+    options: RepostMessageOptions = {},
+  ): Promise<SentMessage> {
+    const key = 'keys' in source ? source.keys : source;
+    return this.#provider.repostMessage(key, chatId, options);
   }
 
   edit(message: Message | SentMessage | MessageKey, text: string): Promise<SentMessage> {

@@ -6,6 +6,7 @@ import type {
   DownloadedMedia,
   MessageContent,
   MessageKey,
+  RepostMessageOptions,
   SentMessage,
 } from '@/models/message.js';
 import { TypedEventEmitter } from '@/provider/event-emitter.js';
@@ -21,6 +22,7 @@ export class FakeProvider implements WhatsAppProvider {
   readonly events = new TypedEventEmitter<ProviderEvents>();
   readonly sent: Array<{ chatId: string; content: MessageContent; replyTo?: MessageKey }> = [];
   readonly deleted: MessageKey[] = [];
+  readonly reposted: Array<{ source: MessageKey; chatId: string; options: RepostMessageOptions }> = [];
   readonly rejectedCalls: Array<{ callId: string; from: string }> = [];
   readonly downloadedMedia: MessageKey[] = [];
   readonly reactions: Array<{ key: MessageKey; emoji?: string }> = [];
@@ -78,6 +80,20 @@ export class FakeProvider implements WhatsAppProvider {
       id: `sent-${this.sent.length}`,
       chatId,
       keys: { id: `sent-${this.sent.length}`, chatId, fromMe: true },
+      timestamp: new Date(),
+    };
+  }
+
+  async repostMessage(
+    source: MessageKey,
+    chatId: string,
+    options: RepostMessageOptions = {},
+  ): Promise<SentMessage> {
+    this.reposted.push({ source, chatId, options });
+    return {
+      id: `repost-${this.reposted.length}`,
+      chatId,
+      keys: { id: `repost-${this.reposted.length}`, chatId, fromMe: true },
       timestamp: new Date(),
     };
   }

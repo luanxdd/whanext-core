@@ -27,6 +27,7 @@ import type {
   MentionTarget,
   MessageContent,
   MessageKey,
+  RepostMessageOptions,
   SentMessage,
 } from '@/models/message.js';
 import {
@@ -232,6 +233,35 @@ export class BaileysProvider implements WhatsAppProvider {
         }
       : undefined;
     const result = await socket.sendMessage(chatId, this.#toContent(content), options);
+    return this.#sent(result);
+  }
+
+  async repostMessage(
+    source: MessageKey,
+    chatId: string,
+    options: RepostMessageOptions = {},
+  ): Promise<SentMessage> {
+    const original = this.#messageStore.get(this.#messageStoreKey(source));
+
+    if (!original?.message) {
+      throw new WhaNextError(
+        'MESSAGE_NOT_FOUND',
+        'The source message is no longer available in the recent-message cache.',
+        {
+          context: { messageId: source.id, chatId: source.chatId },
+          recoverable: true,
+        },
+      );
+    }
+
+    const content = {
+      forward: original,
+      ...(options.mentions && options.mentions.length > 0
+        ? { mentions: this.#mentions(options.mentions) }
+        : {}),
+    } as AnyMessageContent;
+
+    const result = await this.#requireSocket().sendMessage(chatId, content);
     return this.#sent(result);
   }
 

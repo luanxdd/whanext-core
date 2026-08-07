@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.13.0
+
+- Adicionado `MessageService.repost()` para republicar qualquer mensagem do WhatsApp recebida recentemente, sem criar uma resposta.
+- Adicionado suporte a `repostMessage()` em nível de provedor, com injeção de menções.
+- As republicações preservam o payload estruturado original, permitindo que textos, mídias, figurinhas, enquetes, localizações, contatos e mensagens de catálogo sejam reutilizados através da API de alto nível.
+
 
 ## 0.12.0 - Message content classification
 

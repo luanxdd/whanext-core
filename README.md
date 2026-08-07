@@ -803,3 +803,16 @@ MIT. Consulte [LICENSE](./LICENSE).
 ## Aviso
 
 WhaNext não é afiliado, autorizado ou mantido pelo WhatsApp ou pela Meta. O provider padrão usa uma integração não oficial; quem utiliza o projeto é responsável pelos termos aplicáveis e pelos riscos de bloqueio da conta.
+
+
+### Reposting received messages
+
+WhaNext can repost a recently received message while preserving its original WhatsApp payload:
+
+```ts
+await app.message.repost(message.quoted!.key, message.chatId, {
+  mentions: users,
+});
+```
+
+The source message must still be present in the provider recent-message cache. This avoids downloading and reconstructing media or structured messages.

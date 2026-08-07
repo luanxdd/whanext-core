@@ -9,6 +9,7 @@ import type {
   MessageContent,
   MessageKey,
   DownloadedMedia,
+  RepostMessageOptions,
   SentMessage,
 } from '@/models/message.js';
 
@@ -61,6 +62,7 @@ export interface WhatsAppProvider {
     listener: (payload: ProviderEvents[Event]) => void | Promise<void>,
   ): Unsubscribe;
   sendMessage(chatId: string, content: MessageContent, replyTo?: MessageKey): Promise<SentMessage>;
+  repostMessage(source: MessageKey, chatId: string, options?: RepostMessageOptions): Promise<SentMessage>;
   reactToMessage(key: MessageKey, emoji?: string): Promise<SentMessage>;
   downloadMedia(key: MessageKey): Promise<DownloadedMedia>;
   editMessage(key: MessageKey, content: string): Promise<SentMessage>;

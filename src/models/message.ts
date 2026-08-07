@@ -98,6 +98,12 @@ export type MentionTarget =
   | string 
   | User;
 
+/** Options for reposting a previously received message without quoting it. */
+export interface RepostMessageOptions {
+  /** Hidden or visible mentions injected into the reposted payload. */
+  mentions?: readonly MentionTarget[];
+}
+
 export interface TextContent {
   text: string;
   mentions?: MentionTarget[];

@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.14.2
+
+### Corrigido
+
+- Mensagens privadas recebidas agora combinam `remoteJid` e `remoteJidAlt` nas identidades normalizadas do remetente, preservando PN JID e LID quando o WhatsApp fornece ambos.
+- `message.sender`, `message.senderIds` e `ctx.user.phone` passam a expor corretamente o número do remetente em chats privados LID sem exigir tratamento de Baileys na aplicação.
+- A identidade alternativa só é usada para mensagens recebidas em chats privados; mensagens de grupo e mensagens `fromMe` mantêm o comportamento anterior.
+
+### Compatibilidade
+
+- Nenhuma API pública foi removida ou alterada. Aplicações que já usam `ctx.user.phone` passam apenas a receber o número em mais casos.
+
 ## 0.14.1
 
 ### Corrigido

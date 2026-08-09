@@ -584,6 +584,8 @@ console.log(app.account.selfChatId);  // destino preferencial para falar consigo
 
 `selfChatId` prioriza o PN JID canônico e remove automaticamente sufixos de dispositivo como `:12@s.whatsapp.net`.
 
+Em conversas privadas endereçadas por LID, o provider também aproveita o `remoteJidAlt` enviado pelo WhatsApp para preencher a identidade PN do remetente. Assim, quando esse mapeamento estiver presente no evento ao vivo, `ctx.user.phone` continua retornando o número normalmente mesmo que `ctx.chatId` termine em `@lid`.
+
 Na API legada, use `onlyOwner: true`:
 
 ```ts

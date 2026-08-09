@@ -42,6 +42,51 @@ describe('Baileys message content classification', () => {
   });
 
 
+
+  it('resolves the phone number from remoteJidAlt in private LID chats', () => {
+    const message = normalizeBaileysMessage({
+      key: {
+        id: 'private-lid-message',
+        remoteJid: '192758887264324@lid',
+        remoteJidAlt: '5531995724651@s.whatsapp.net',
+        fromMe: false,
+      },
+      message: {
+        conversation: '×login',
+      },
+      messageTimestamp: 1,
+    } as unknown as WAMessage);
+
+    expect(message).toBeDefined();
+    expect(message?.senderId).toBe('5531995724651@s.whatsapp.net');
+    expect(message?.senderIds).toEqual([
+      '5531995724651@s.whatsapp.net',
+      '192758887264324@lid',
+    ]);
+    expect(message?.sender.jid).toBe('5531995724651@s.whatsapp.net');
+    expect(message?.sender.lid).toBe('192758887264324@lid');
+    expect(message?.sender.phone).toBe('5531995724651');
+  });
+
+  it('does not treat remoteJidAlt as the sender of fromMe private messages', () => {
+    const message = normalizeBaileysMessage({
+      key: {
+        id: 'private-from-me',
+        remoteJid: '192758887264324@lid',
+        remoteJidAlt: '5531888888888@s.whatsapp.net',
+        fromMe: true,
+      },
+      message: {
+        conversation: 'mensagem enviada',
+      },
+      messageTimestamp: 1,
+    } as unknown as WAMessage);
+
+    expect(message).toBeDefined();
+    expect(message?.sender.phone).toBeUndefined();
+    expect(message?.senderId).toBe('192758887264324@lid');
+  });
+
   it('preserves view-once metadata from the Baileys wrapper', () => {
     const message = normalizeBaileysMessage(createMessage({
       viewOnceMessageV2Extension: {

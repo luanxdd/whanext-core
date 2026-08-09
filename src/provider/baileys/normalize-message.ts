@@ -92,12 +92,16 @@ export function normalizeBaileysMessage(input: WAMessage): Message | undefined {
   const type = getContentType(content);
   const node = type ? content[type] : undefined;
   const context = getContextInfo(node);
+  const isPrivateIncoming = !chatId.endsWith('@g.us') && input.key.fromMe !== true;
+  const remoteJidAlt = (input.key as WAMessageKey & { remoteJidAlt?: string | null }).remoteJidAlt;
   const senderIds = uniqueIdentities([
     input.key.participant,
     input.key.participantAlt,
     input.key.participantUsername?.includes('@')
       ? input.key.participantUsername
       : undefined,
+    isPrivateIncoming ? remoteJidAlt : undefined,
+    isPrivateIncoming ? chatId : undefined,
   ]);
   const senderJid = senderIds.find((identity) =>
     identity.endsWith('@s.whatsapp.net') || identity.endsWith('@c.us'));

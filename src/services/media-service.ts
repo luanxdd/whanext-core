@@ -4,6 +4,7 @@ import type {
   ImageContent,
   Message,
   MessageKey,
+  QuotedMessage,
   SentMessage,
   StickerContent,
   VideoContent,
@@ -33,8 +34,13 @@ export class MediaService {
     return this.#provider.sendMessage(chatId, content);
   }
 
-  download(message: Message | MessageKey): Promise<DownloadedMedia> {
-    const key = 'keys' in message ? message.keys : message;
+  download(message: Message | QuotedMessage | MessageKey): Promise<DownloadedMedia> {
+    const key = 'keys' in message
+      ? message.keys
+      : 'key' in message
+        ? message.key
+        : message;
+
     return this.#provider.downloadMedia(key);
   }
 }

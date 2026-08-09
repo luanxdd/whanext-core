@@ -115,6 +115,34 @@ describe('modern commands', () => {
     expect(execute.mock.calls[0]?.[0].isOwner).toBe(true);
   });
 
+
+  it('exposes canonical identities for self-chat without preferring LID', async () => {
+    const provider = new FakeProvider();
+    provider.currentUserIds = [
+      '192758887264324@lid',
+      '5531995724651:12@s.whatsapp.net',
+    ];
+    const app = await create({ provider });
+
+    expect(app.account.jid).toBe('5531995724651@s.whatsapp.net');
+    expect(app.account.lid).toBe('192758887264324@lid');
+    expect(app.account.phoneNumber).toBe('5531995724651');
+    expect(app.account.selfChatId).toBe('5531995724651@s.whatsapp.net');
+  });
+
+  it('builds the self-chat PN JID when the provider exposes a plain phone number', async () => {
+    const provider = new FakeProvider();
+    provider.currentUserIds = [
+      '192758887264324@lid',
+      '5531995724651',
+    ];
+    const app = await create({ provider });
+
+    expect(app.account.jid).toBe('5531995724651@s.whatsapp.net');
+    expect(app.account.phoneNumber).toBe('5531995724651');
+    expect(app.account.selfChatId).toBe('5531995724651@s.whatsapp.net');
+  });
+
   it('provides a message-compatible context with typed options and response helpers', async () => {
     const provider = new FakeProvider();
     const app = await create({ provider, prefix: '&' });

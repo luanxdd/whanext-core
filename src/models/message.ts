@@ -48,6 +48,15 @@ export interface QuotedMessage {
   senderId?: string;
   sender?: User;
   hasMedia: boolean;
+  /**
+   * Indica se a mensagem citada foi enviada como visualização única.
+   * O provider oficial sempre preenche este campo.
+   */
+  isViewOnce?: boolean;
+  /** Classificação normalizada do conteúdo citado. */
+  contentKind?: MessageContentKind;
+  /** Metadados da mídia citada, quando houver. */
+  media?: MessageMedia;
 }
 
 export interface Message {

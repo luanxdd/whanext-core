@@ -154,6 +154,32 @@ describe('WhaNextApp', () => {
     expect(provider.downloadedMedia).toEqual([message.keys]);
   });
 
+  it('downloads quoted media directly through the media API', async () => {
+    const provider = new FakeProvider();
+    const app = await create({ provider });
+    const quoted = {
+      key: {
+        id: 'quoted-view-once',
+        chatId: '123@g.us',
+        fromMe: false,
+        participantId: '5511888888888@s.whatsapp.net',
+      },
+      hasMedia: true,
+      isViewOnce: true,
+      contentKind: 'image' as const,
+      media: {
+        kind: 'image' as const,
+        mimetype: 'image/jpeg',
+        viewOnce: true,
+      },
+    };
+
+    const downloaded = await app.media.download(quoted);
+
+    expect(downloaded.kind).toBe('image');
+    expect(provider.downloadedMedia).toEqual([quoted.key]);
+  });
+
   it('sends stickers through the media API', async () => {
     const provider = new FakeProvider();
     const app = await create({ provider });

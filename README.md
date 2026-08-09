@@ -373,7 +373,21 @@ const downloaded = await app.media.download(message);
 await writeFile(`./downloads/${downloaded.fileName ?? message.id}`, downloaded.data);
 ```
 
-`download()` aceita a `Message` recebida ou a sua `MessageKey` e devolve o buffer junto dos metadados normalizados. A mídia deve ser baixada enquanto a mensagem ainda está no cache da instância; o provider tenta renovar a URL de mídia automaticamente quando necessário.
+`download()` aceita a `Message` recebida, uma `QuotedMessage` ou uma `MessageKey` e devolve o buffer junto dos metadados normalizados. A mídia deve ser baixada enquanto a mensagem ainda está no cache da instância; o provider tenta renovar a URL de mídia automaticamente quando necessário.
+
+Para visualização única citada, o provider oficial preserva os metadados do envelope sem expor tipos do Baileys:
+
+```ts
+if (message.quoted?.isViewOnce && message.quoted.hasMedia) {
+  const media = await app.media.download(message.quoted);
+
+  console.log(message.quoted.contentKind); // image | video | audio
+  console.log(message.quoted.media?.kind);
+  console.log(media.mimetype);
+}
+```
+
+Isso também funciona quando a mídia de visualização única aparece dentro de envelopes `viewOnceMessageV2` ou `viewOnceMessageV2Extension`.
 
 Stickers aceitam `Uint8Array`, URL ou caminho local e devem estar em WebP, inclusive para animações. Texto, imagem e vídeo aceitam `User` diretamente em `mentions`.
 
@@ -558,6 +572,17 @@ if (ctx.isOwner) {
   console.log(ctx.account.ids);
 }
 ```
+
+A identidade da própria conta também pode ser consultada sem escolher manualmente entre JID e LID:
+
+```ts
+console.log(app.account.jid);         // 5531...@s.whatsapp.net
+console.log(app.account.lid);         // ...@lid
+console.log(app.account.phoneNumber); // 5531...
+console.log(app.account.selfChatId);  // destino preferencial para falar consigo mesmo
+```
+
+`selfChatId` prioriza o PN JID canônico e remove automaticamente sufixos de dispositivo como `:12@s.whatsapp.net`.
 
 Na API legada, use `onlyOwner: true`:
 

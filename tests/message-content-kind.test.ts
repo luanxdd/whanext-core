@@ -41,6 +41,69 @@ describe('Baileys message content classification', () => {
     expect(message?.contentKind).toBe(expected);
   });
 
+
+  it('preserves view-once metadata from the Baileys wrapper', () => {
+    const message = normalizeBaileysMessage(createMessage({
+      viewOnceMessageV2Extension: {
+        message: {
+          imageMessage: {
+            mimetype: 'image/jpeg',
+          },
+        },
+      },
+    }));
+
+    expect(message).toMatchObject({
+      contentKind: 'image',
+      hasMedia: true,
+      isViewOnce: true,
+      media: {
+        kind: 'image',
+        mimetype: 'image/jpeg',
+        viewOnce: true,
+      },
+    });
+  });
+
+  it('exposes view-once metadata on quoted media', () => {
+    const message = normalizeBaileysMessage(createMessage({
+      extendedTextMessage: {
+        text: 'kkkk',
+        contextInfo: {
+          stanzaId: 'view-once-id',
+          participant: '5511888888888@s.whatsapp.net',
+          quotedMessage: {
+            viewOnceMessageV2Extension: {
+              message: {
+                videoMessage: {
+                  mimetype: 'video/mp4',
+                  seconds: 7,
+                },
+              },
+            },
+          },
+        },
+      },
+    }));
+
+    expect(message?.quoted).toMatchObject({
+      hasMedia: true,
+      isViewOnce: true,
+      contentKind: 'video',
+      media: {
+        kind: 'video',
+        mimetype: 'video/mp4',
+        seconds: 7,
+        viewOnce: true,
+      },
+      key: {
+        id: 'view-once-id',
+        chatId: '5511999999999@s.whatsapp.net',
+        participantId: '5511888888888@s.whatsapp.net',
+      },
+    });
+  });
+
   it('keeps media metadata independent from content classification', () => {
     const message = normalizeBaileysMessage(createMessage({
       imageMessage: {

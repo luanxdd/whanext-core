@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.14.1
+
+### Corrigido
+
+- A normalização agora preserva corretamente o envelope de visualização única (`viewOnceMessage`, `viewOnceMessageV2` e `viewOnceMessageV2Extension`) antes de desembrulhar a mídia.
+- `message.isViewOnce` passa a ser verdadeiro mesmo quando o Baileys representa a visualização única apenas pelo wrapper externo.
+- Mensagens citadas agora expõem `quoted.isViewOnce`, `quoted.contentKind` e `quoted.media`, permitindo distinguir mídia normal de visualização única sem heurísticas na aplicação.
+- `app.media.download()` aceita diretamente uma `QuotedMessage`, permitindo `app.media.download(message.quoted)` quando houver mídia citada.
+- `app.account.jid`, `app.account.lid`, `app.account.phoneNumber` e `app.account.selfChatId` expõem identidades canônicas da própria conta. `selfChatId` prioriza PN JID sem sufixo de dispositivo antes de usar LID.
+
+### Compatibilidade
+
+- Os novos campos de `QuotedMessage` são opcionais no contrato público para não quebrar providers customizados ou objetos criados manualmente. O provider Baileys oficial os preenche nas mensagens normalizadas.
+- `app.media.download(message)` e `app.media.download(message.keys)` continuam funcionando sem alteração.
+
 ## 0.14.0
 
 ### Adicionado

@@ -36,6 +36,22 @@ function unwrapMessageContent(
   return nested ? unwrapMessageContent(nested) : content;
 }
 
+function isViewOnceContent(
+  input: WAMessageContent | null | undefined,
+): boolean {
+  if (!input) return false;
+
+  if (
+    input.viewOnceMessage?.message
+    || input.viewOnceMessageV2?.message
+    || input.viewOnceMessageV2Extension?.message
+  ) {
+    return true;
+  }
+
+  return isViewOnceContent(input.ephemeralMessage?.message);
+}
+
 export function extractQuotedBaileysMessage(input: WAMessage): WAMessage | undefined {
   const chatId = input.key.remoteJid;
   const content = unwrapMessageContent(input.message);
@@ -94,7 +110,8 @@ export function normalizeBaileysMessage(input: WAMessage): Message | undefined {
   });
   const mentionedUsers = (context?.mentionedJid ?? []).map((identity) =>
     User.fromIdentities([identity]));
-  const media = getMedia(type, node, Boolean(input.key.isViewOnce));
+  const viewOnce = Boolean(input.key.isViewOnce) || isViewOnceContent(input.message);
+  const media = getMedia(type, node, viewOnce);
   const contentKind = getContentKind(type);
   const text = getText(content);
   const caption = getCaption(content);
@@ -252,22 +269,28 @@ function getQuoted(
   }
 
   const quoted = context.quotedMessage;
+  const quotedIsViewOnce = isViewOnceContent(quoted);
   const content = unwrapMessageContent(quoted);
+  const type = content ? getContentType(content) : undefined;
+  const node = type && content ? content[type] : undefined;
+  const media = getMedia(type, node, quotedIsViewOnce);
   const result: QuotedMessage = {
     key: {
       id: context.stanzaId,
       chatId: context.remoteJid ?? chatId,
       fromMe: false,
     },
-    hasMedia: Boolean(
-      content
-      && getMedia(
-        getContentType(content),
-        content[getContentType(content) ?? 'conversation'],
-        false,
-      ),
-    ),
+    hasMedia: media !== undefined,
+    isViewOnce: media?.viewOnce ?? quotedIsViewOnce,
   };
+
+  if (content) {
+    result.contentKind = getContentKind(type);
+  }
+
+  if (media) {
+    result.media = media;
+  }
 
   if (context.participant) {
     result.senderId = context.participant;

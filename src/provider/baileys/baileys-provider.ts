@@ -511,9 +511,9 @@ export class BaileysProvider implements WhatsAppProvider {
   }
 
   #browserDescription(): [string, string, string] {
-    if (this.#options.browser === Browser.MacOS) return Browsers.macOS('Chrome');
+    if (this.#options.browser === Browser.MacOS) return Browsers.macOS('Safari');
     if (this.#options.browser === Browser.Ubuntu) return Browsers.ubuntu('Chrome');
-    return Browsers.windows('Chrome');
+    return Browsers.windows('Brave');
   }
 
   #isTerminal(error?: Error): boolean {

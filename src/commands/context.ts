@@ -28,7 +28,14 @@ export interface CommandCatalogView {
   find(path: string): RegisteredCommand | undefined;
 }
 
+export interface CommandAccountContext {
+  readonly id: string | undefined;
+  readonly ids: readonly string[];
+  isOwner(message: Pick<Message, 'keys' | 'senderIds'>): boolean;
+}
+
 export interface CommandRuntimeServices {
+  account: CommandAccountContext;
   messages: MessageService;
   media: MediaService;
   groups: GroupService;
@@ -58,6 +65,8 @@ export interface CommandContext<Schema extends CommandOptionSchema = CommandOpti
   extends Message {
   readonly message: Message;
   readonly user: User;
+  readonly account: CommandAccountContext;
+  readonly isOwner: boolean;
   readonly chat: CommandChatContext;
   readonly group: CommandGroupContext | undefined;
   readonly command: RegisteredCommand;
@@ -99,6 +108,8 @@ interface CreateCommandContextOptions<Schema extends CommandOptionSchema> {
 class CommandContextImplementation<Schema extends CommandOptionSchema> {
   readonly message: Message;
   readonly user: User;
+  readonly account: CommandAccountContext;
+  readonly isOwner: boolean;
   readonly chat: CommandChatContext;
   readonly group: CommandGroupContext | undefined;
   readonly command: RegisteredCommand;
@@ -121,6 +132,8 @@ class CommandContextImplementation<Schema extends CommandOptionSchema> {
   constructor(options: CreateCommandContextOptions<Schema>) {
     this.message = options.message;
     this.user = options.message.sender;
+    this.account = options.services.account;
+    this.isOwner = this.account.isOwner(options.message);
     this.chat = { id: options.message.chatId, isGroup: options.message.isGroup };
     this.command = options.command;
     this.commands = options.commands;

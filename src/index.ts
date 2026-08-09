@@ -4,6 +4,17 @@ export {
   type ReconnectOptions,
 } from '@/app/create.js';
 export {
+  createMulti,
+  MultiCommandRouter,
+  WhaNextMultiApp,
+  type CreateMultiOptions,
+  type MultiAccountOptions,
+  type MultiAppEvent,
+  type MultiAppHealth,
+  type MultiLoadCommandsResult,
+  type MultiLoginOptions,
+} from '@/app/multi-app.js';
+export {
   WhaNextApp,
   type AppHealth,
   type AppHealthStatus,
@@ -41,6 +52,7 @@ export {
 } from '@/commands/command.js';
 export {
   DeferredReply,
+  type CommandAccountContext,
   type CommandCatalogView,
   type CommandChatContext,
   type CommandContext,
@@ -131,6 +143,7 @@ export type {
   TextContent,
   VideoContent,
 } from '@/models/message.js';
+export { AccountService } from '@/services/account-service.js';
 export {
   User,
   type UserData,

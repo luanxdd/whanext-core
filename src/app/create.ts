@@ -29,6 +29,7 @@ export interface CreateOptions {
   reconnect?: ReconnectOptions;
   messageCacheSize?: number;
   provider?: WhatsAppProvider;
+  accountId?: string;
 }
 
 export async function create(options: CreateOptions = {}): Promise<WhaNextApp> {
@@ -52,6 +53,7 @@ export async function create(options: CreateOptions = {}): Promise<WhaNextApp> {
   });
 
   return new WhaNextApp(provider, {
+    ...(options.accountId ? { accountId: options.accountId } : {}),
     ...(options.phone ? { phone: options.phone } : {}),
     ...(options.prefix !== undefined ? { prefix: options.prefix } : {}),
     ...(options.cache ? { cache: options.cache } : {}),

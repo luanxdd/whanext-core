@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.14.0
+
+### Adicionado
+
+- `guards.owner()` para restringir comandos à própria conta conectada ao WhatsApp.
+- `onlyOwner: true` para manter o mesmo recurso disponível na API legada de comandos.
+- `ctx.isOwner` e `ctx.account` no contexto moderno; em multi-account, `ctx.account.id` identifica qual conta executou o comando.
+- `app.account` com os identificadores atuais da conta e `isOwner(message)` sem exigir JID, LID ou número manual.
+- `createMulti()` e `WhaNextMultiApp` para manter várias contas independentes no mesmo processo.
+- `multi.commands` para registrar comandos, middleware, handlers de erro e autoload em todas as contas da instância.
+- `multi.login()`, `multi.disconnect()`, `multi.health()`, `multi.get()`, `multi.ids()` e `multi.isReady` para operar as contas em conjunto.
+- `multi.on()` para observar eventos de todas as contas com `accountId`, aplicação e payload de origem.
+- Sessões automáticas isoladas em `./sessions/<id>` quando `auth` não é informado.
+- Banco de mute automático separado por conta (`./data/whanext-<id>.sqlite`) quando o mute é habilitado sem banco/store explícito.
+
+### Segurança e compatibilidade
+
+- IDs de contas multi-account são validados para impedir caminhos de sessão inseguros.
+- Diretórios `auth` duplicados são rejeitados entre contas que usam o provider padrão.
+- `create()` e toda a API de uma única conta continuam compatíveis.
+- Cada conta mantém provider, socket, sessão, cache, reconexão e identidade próprios; nenhuma sessão ativa é compartilhada entre contas.
+
 ## 0.13.1
 
 - Corrigido download de mídias para mensagens visualização única citadas, através do cache do payload citado carregado em `contextInfo`.

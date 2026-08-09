@@ -4,7 +4,7 @@
 
 | Versão | Suporte |
 | --- | --- |
-| 0.8.x | Sim |
+| 0.14.x | Sim |
 | anteriores | Não |
 
 ## Reportando uma vulnerabilidade

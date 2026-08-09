@@ -12,6 +12,14 @@ export type CommandGuard = (
 ) => boolean | void | GuardResult | Promise<boolean | void | GuardResult>;
 
 export const guards = {
+  owner(): CommandGuard {
+    return (context) => context.isOwner || ({
+      allowed: false,
+      code: 'COMMAND_NOT_ALLOWED',
+      message: 'This command can only be used by the connected WhatsApp account.',
+    });
+  },
+
   group(): CommandGuard {
     return (context) => context.isGroup || ({
       allowed: false,

@@ -52,6 +52,7 @@ export interface CommandMetadata {
   onlyPrivate?: boolean;
   onlyAdmin?: boolean;
   botMustBeAdmin?: boolean;
+  onlyOwner?: boolean;
 }
 
 export interface ExecutableCommandDefinition<

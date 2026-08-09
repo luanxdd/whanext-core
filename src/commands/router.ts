@@ -361,6 +361,12 @@ export class CommandRouter {
   }
 
   async #authorizeLegacy(command: CommandDefinition, context: CommandContext): Promise<void> {
+    if (command.onlyOwner && !context.isOwner) {
+      throw new WhaNextError(
+        'COMMAND_NOT_ALLOWED',
+        'This command can only be used by the connected WhatsApp account.',
+      );
+    }
     if (command.onlyGroup && !context.isGroup) {
       throw new WhaNextError('COMMAND_NOT_ALLOWED', 'This command can only be used in groups.');
     }
@@ -592,6 +598,15 @@ function createLegacyServices(group: GroupService): CommandRuntimeServices {
     },
   });
   return {
+    account: {
+      id: undefined,
+      get ids() {
+        return [];
+      },
+      isOwner(message) {
+        return message.keys.fromMe;
+      },
+    },
     groups: group,
     users: new UserService(group),
     messages: unavailable as CommandRuntimeServices['messages'],

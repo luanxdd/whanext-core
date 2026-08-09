@@ -27,6 +27,7 @@ import type {
   ConnectionUpdate,
   WhatsAppProvider,
 } from '@/provider/provider.js';
+import { AccountService } from '@/services/account-service.js';
 import { ChatService } from '@/services/chat-service.js';
 import { GroupService } from '@/services/group-service.js';
 import { MediaService } from '@/services/media-service.js';
@@ -67,9 +68,11 @@ export interface WhaNextAppOptions {
   logger?: LoggerConfig;
   mute?: MuteOptions;
   router?: Omit<RouterOptions, 'prefix'>;
+  accountId?: string;
 }
 
 export class WhaNextApp {
+  readonly account: AccountService;
   readonly message: MessageService;
   readonly media: MediaService;
   readonly group: GroupService;
@@ -93,6 +96,7 @@ export class WhaNextApp {
   ) {
     this.#provider = provider;
     this.#phone = options.phone;
+    this.account = new AccountService(provider, options.accountId);
     this.logger = logger;
     const cache = options.cache?.store ?? new MemoryCache(
       options.cache?.memoryMaxEntries === undefined
@@ -111,6 +115,7 @@ export class WhaNextApp {
       : undefined;
     this.mute = new MuteService(provider, muteStore);
     this.commands = new CommandRouter({
+      account: this.account,
       messages: this.message,
       media: this.media,
       groups: this.group,

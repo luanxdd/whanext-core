@@ -38,6 +38,83 @@ function makeMessage(text: string, id = `message-${Math.random()}`): Message {
 }
 
 describe('modern commands', () => {
+  it('allows owner-only commands only for the connected WhatsApp account', async () => {
+    const provider = new FakeProvider();
+    const app = await create({ provider });
+    const execute = vi.fn();
+    const errors: string[] = [];
+    app.commands.onError((_ctx, error) => { errors.push(error.code); });
+    app.commands.command(defineCommand({
+      name: 'owner',
+      description: 'Owner command.',
+      guards: [guards.owner()],
+      execute,
+    }));
+
+    await provider.events.emit('message', {
+      ...makeMessage('!owner', 'owner-self'),
+      senderId: '5511888888888@s.whatsapp.net',
+      senderIds: ['5511888888888@s.whatsapp.net'],
+      sender: User.fromIdentities(['5511888888888@s.whatsapp.net']),
+      keys: { id: 'owner-self', chatId: '123@g.us', fromMe: true },
+    });
+    await provider.events.emit('message', {
+      ...makeMessage('!owner', 'owner-other'),
+      senderId: '5511777777777@s.whatsapp.net',
+      senderIds: ['5511777777777@s.whatsapp.net'],
+      sender: User.fromIdentities(['5511777777777@s.whatsapp.net']),
+    });
+
+    expect(execute).toHaveBeenCalledOnce();
+    expect(execute.mock.calls[0]?.[0].isOwner).toBe(true);
+    expect(errors).toEqual(['COMMAND_NOT_ALLOWED']);
+  });
+
+  it('keeps onlyOwner available for legacy command metadata', async () => {
+    const provider = new FakeProvider();
+    const app = await create({ provider });
+    const execute = vi.fn();
+    const errors: string[] = [];
+    app.commands.onError((_ctx, error) => { errors.push(error.code); });
+    app.commands.command(defineCommand({
+      name: 'legacy-owner',
+      description: 'Legacy owner command.',
+      onlyOwner: true,
+      execute,
+    }));
+
+    await provider.events.emit('message', {
+      ...makeMessage('!legacy-owner', 'legacy-owner-self'),
+      keys: { id: 'legacy-owner-self', chatId: '123@g.us', fromMe: true },
+    });
+    await provider.events.emit('message', {
+      ...makeMessage('!legacy-owner', 'legacy-owner-other'),
+      senderId: '5511777777777@s.whatsapp.net',
+      senderIds: ['5511777777777@s.whatsapp.net'],
+      sender: User.fromIdentities(['5511777777777@s.whatsapp.net']),
+    });
+
+    expect(execute).toHaveBeenCalledOnce();
+    expect(errors).toEqual(['COMMAND_NOT_ALLOWED']);
+  });
+
+  it('recognizes the connected account identity as owner when fromMe is unavailable', async () => {
+    const provider = new FakeProvider();
+    const app = await create({ provider });
+    const execute = vi.fn();
+    app.commands.command(defineCommand({
+      name: 'owner-identity',
+      description: 'Owner command using the connected account identity.',
+      guards: [guards.owner()],
+      execute,
+    }));
+
+    await provider.events.emit('message', makeMessage('!owner-identity', 'owner-by-identity'));
+
+    expect(execute).toHaveBeenCalledOnce();
+    expect(execute.mock.calls[0]?.[0].isOwner).toBe(true);
+  });
+
   it('provides a message-compatible context with typed options and response helpers', async () => {
     const provider = new FakeProvider();
     const app = await create({ provider, prefix: '&' });

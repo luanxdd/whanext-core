@@ -18,13 +18,6 @@ import type {
 } from '@/models/message.js';
 import { User } from '@/models/user.js';
 
-/**
- * Unwraps transport envelopes that may surround a WhatsApp payload.
- *
- * Baileys normally unwraps these through normalizeMessageContent(), but we
- * intentionally handle the known envelopes as well. This keeps quoted
- * view-once media reliable across Baileys payload variants.
- */
 function unwrapMessageContent(
   input: WAMessageContent | null | undefined,
 ): WAMessageContent | undefined {
@@ -43,12 +36,6 @@ function unwrapMessageContent(
   return nested ? unwrapMessageContent(nested) : content;
 }
 
-/**
- * Extracts a quoted payload from an incoming Baileys message as a synthetic
- * WAMessage. Providers can cache this payload so media downloads still work
- * even when the original view-once message is no longer present in the
- * recent-message cache.
- */
 export function extractQuotedBaileysMessage(input: WAMessage): WAMessage | undefined {
   const chatId = input.key.remoteJid;
   const content = unwrapMessageContent(input.message);

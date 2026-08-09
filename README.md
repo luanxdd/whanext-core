@@ -33,7 +33,9 @@ await app.login({
 
 - API pública sem objetos ou tipos crus do Baileys.
 - Login por pairing code, sessão persistente e reconexão automática.
+- Uma ou várias contas independentes no mesmo processo com `createMulti()`.
 - Prefixo global e comandos declarativos com argumentos tipados.
+- Comandos exclusivos da conta conectada com `guards.owner()` ou `onlyOwner`.
 - Usuários normalizados entre JID, LID e PN.
 - Mensagens, replies, edição, exclusão, menções, mídias e download normalizado.
 - Operações de grupos e membros com resultados idempotentes.
@@ -100,6 +102,62 @@ await app.login({
 ```
 
 O prefixo é definido uma vez. O router identifica o comando, remove o prefixo e cria o `ArgsParser` automaticamente.
+
+## Múltiplas contas
+
+Para manter duas, três ou mais contas de WhatsApp no mesmo processo, use `createMulti()`. Cada conta possui conexão, sessão, cache, reconexão e identidade próprios. A instância conjunta apenas coordena essas aplicações independentes.
+
+```ts
+import {
+  Browser,
+  createMulti,
+  defineCommand,
+  guards,
+} from '@whanext/core';
+
+const multi = await createMulti({
+  prefix: ';',
+  browser: Browser.Windows,
+  authRoot: './sessions',
+  logger: 'info',
+  accounts: [
+    { id: 'principal', phone: process.env.PHONE_1 },
+    { id: 'secundaria', phone: process.env.PHONE_2 },
+    { id: 'terceira', phone: process.env.PHONE_3 },
+  ],
+});
+
+multi.commands.command(defineCommand({
+  name: 'painel',
+  description: 'Exibe um painel exclusivo do dono.',
+  guards: [guards.owner()],
+  async execute(ctx) {
+    await ctx.reply(`Conta: ${ctx.account.id}`);
+  },
+}));
+
+await multi.login({
+  onCode(accountId, code) {
+    console.log(`[${accountId}] Código de pareamento:`, code);
+  },
+});
+```
+
+Quando `auth` não é informado na conta, o WhaNext cria automaticamente caminhos separados como `./sessions/principal`, `./sessions/secundaria` e `./sessions/terceira`. O mesmo diretório de sessão não pode ser usado por duas contas do provider padrão.
+
+Uma conta específica continua sendo um `WhaNextApp` completo:
+
+```ts
+const principal = multi.get('principal');
+
+if (principal?.isReady) {
+  await principal.message.send('5511999999999@s.whatsapp.net', {
+    text: 'Olá pela conta principal.',
+  });
+}
+```
+
+`multi.commands.command()`, `use()`, `onError()` e `load()` aplicam a mesma configuração de comandos a todas as contas. Dentro de um comando, `ctx.account.id` informa qual conta recebeu e executou aquela interação. Eventos também podem ser observados em conjunto com `multi.on()`.
 
 ## Logging
 
@@ -477,6 +535,45 @@ app.commands.command(
 );
 ```
 
+### Comandos exclusivos do dono
+
+O dono é a própria conta conectada naquela aplicação. Não é necessário salvar número, JID ou LID manualmente. O provider usa a marca de mensagem enviada pela própria conta e, quando necessário, compara as identidades normalizadas da sessão.
+
+```ts
+app.commands.command(defineCommand({
+  name: 'chay',
+  description: 'Comando privado da conta conectada.',
+  guards: [guards.owner()],
+
+  async execute(ctx) {
+    await ctx.reply('💣 *Comando autorizado*');
+  },
+}));
+```
+
+No contexto moderno também é possível consultar a informação diretamente:
+
+```ts
+if (ctx.isOwner) {
+  console.log(ctx.account.ids);
+}
+```
+
+Na API legada, use `onlyOwner: true`:
+
+```ts
+app.router().command(defineCommand({
+  name: 'interno',
+  description: 'Comando exclusivo do dono.',
+  onlyOwner: true,
+  execute(message) {
+    return app.message.reply(message, { text: 'Autorizado.' });
+  },
+}));
+```
+
+Em uma instância criada com `createMulti()`, o dono é resolvido separadamente para cada conta. Uma mensagem enviada pela conta `principal` não passa automaticamente como dona da conta `secundaria`.
+
 ### Subcomandos
 
 ```ts
@@ -579,6 +676,7 @@ Restrições disponíveis:
 - `onlyPrivate`
 - `onlyAdmin`
 - `botMustBeAdmin`
+- `onlyOwner`
 
 `ArgsParser` possui `string`, `number`, `boolean`, `enum`, `user`, `duration`, `peek`, `skip` e `rest`. `args.user()` retorna `User`, nunca uma string crua.
 

@@ -42,6 +42,31 @@ describe('WhaNextApp', () => {
     expect(app.state).toBe('connected');
   });
 
+  it('does not leak an unhandled connection rejection when pairing fails', async () => {
+    class PairingFailureProvider extends FakeProvider {
+      override async connect(): Promise<void> {
+        await this.events.emit('connection', { state: 'connecting' });
+      }
+
+      override async requestPairingCode(): Promise<string> {
+        await this.events.emit('connection', {
+          state: 'closed',
+          error: new Error('connection closed'),
+        });
+        throw new Error('pairing failed');
+      }
+    }
+
+    const provider = new PairingFailureProvider();
+    const app = await create({ provider, phone: '5511999999999', logger: 'silent' });
+
+    await expect(app.login()).rejects.toThrow('pairing failed');
+
+    // Dá um turno ao microtask queue. Antes da correção, a Promise interna
+    // que aguardava a conexão ficava rejeitada sem handler nesse caminho.
+    await Promise.resolve();
+  });
+
   it('provides a production health snapshot', async () => {
     const provider = new FakeProvider();
     const app = await create({ provider, logger: 'silent' });

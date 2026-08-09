@@ -203,6 +203,8 @@ export class WhaNextApp {
       }, options.timeoutMs ?? 300_000);
     });
 
+    void connected.catch(() => undefined);
+
     try {
       await this.#provider.connect();
 

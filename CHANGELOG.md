@@ -1,5 +1,11 @@
 # Changelog
 
+
+## 0.14.3
+
+- Corrige uma rejeição órfã durante o login quando a solicitação de código de pareamento falha ao mesmo tempo em que o socket é fechado.
+- Mantém o erro principal de autenticação sem gerar `unhandledRejection` paralelo no processo.
+
 ## 0.14.2
 
 ### Corrigido

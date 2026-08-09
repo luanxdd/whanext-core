@@ -1,4 +1,5 @@
 import type {
+  ButtonsContent,
   MentionTarget,
   Message,
   MessageContent,
@@ -65,6 +66,10 @@ export class MessageService {
       content.mentions = mentions;
     }
 
+    return this.send(chatId, content);
+  }
+
+  buttons(chatId: string, content: ButtonsContent): Promise<SentMessage> {
     return this.send(chatId, content);
   }
 }

@@ -1,6 +1,27 @@
 # Changelog
 
 
+## 0.15.0
+
+### Adicionado
+
+- Suporte de alto nível a mensagens com botões interativos Native Flow.
+- Botão `copy` para copiar códigos/textos usando `cta_copy`.
+- Botão `link` para abrir URLs usando `cta_url`.
+- Novo `ButtonsContent` no `MessageContent`, com `title`, `text`, `footer`, `mentions` e uma lista tipada de botões.
+- Novo atalho `app.message.buttons(chatId, content)`; `ctx.reply({...})` e `app.message.reply(...)` também aceitam o novo conteúdo automaticamente.
+- Exportação pública dos tipos `ButtonsContent`, `MessageButton`, `CopyCodeButton` e `LinkButton`.
+
+### Provider Baileys
+
+- Mensagens interativas são geradas como `InteractiveMessage`/`NativeFlowMessage` e enviadas por `relayMessage`, sem expor protobufs ao consumidor.
+- Replies e menções são preservados no envio de botões.
+- O relay inclui os nós de compatibilidade necessários para Native Flow em chats privados e grupos.
+
+### Compatibilidade
+
+- Nenhum contrato existente foi removido. Texto, mídia, reações, edição, delete e repost continuam usando as APIs anteriores.
+
 ## 0.14.3
 
 - Corrige uma rejeição órfã durante o login quando a solicitação de código de pareamento falha ao mesmo tempo em que o socket é fechado.

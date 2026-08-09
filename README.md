@@ -340,6 +340,44 @@ await app.message.react(sent, '👏🏻');
 await app.message.unreact(sent);
 ```
 
+### Botões interativos
+
+Por enquanto, a API pública suporta botões de **copiar código** e **abrir link**:
+
+```ts
+await app.message.buttons(chatId, {
+  title: 'Acesso',
+  text: 'Escolha uma ação:',
+  footer: 'WhaNext',
+  buttons: [
+    {
+      type: 'copy',
+      label: 'Copiar código',
+      code: 'ABC-123',
+    },
+    {
+      type: 'link',
+      label: 'Abrir painel',
+      url: 'https://example.com',
+    },
+  ],
+});
+```
+
+Também funciona diretamente em replies de comandos, sem importar tipos do Baileys:
+
+```ts
+await ctx.reply({
+  text: 'Use uma das opções abaixo.',
+  buttons: [
+    { type: 'copy', label: 'Copiar', code: 'ABC-123' },
+    { type: 'link', label: 'Abrir site', url: 'https://example.com' },
+  ],
+});
+```
+
+`title`, `footer` e `mentions` são opcionais. Os botões podem ser combinados na mesma mensagem.
+
 `delete()` aceita `Message`, `SentMessage` ou `MessageKey`.
 
 `react()` aceita os mesmos tipos e adiciona uma reação à mensagem. `unreact()` remove a reação da conta conectada.

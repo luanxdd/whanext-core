@@ -110,6 +110,30 @@ export interface TextContent {
   mentions?: MentionTarget[];
 }
 
+export interface LinkButton {
+  type: 'link';
+  label: string;
+  url: string;
+}
+
+export interface CopyCodeButton {
+  type: 'copy';
+  label: string;
+  code: string;
+}
+
+export type MessageButton =
+  | LinkButton
+  | CopyCodeButton;
+
+export interface ButtonsContent {
+  text: string;
+  buttons: MessageButton[];
+  title?: string;
+  footer?: string;
+  mentions?: MentionTarget[];
+}
+
 export interface ImageContent {
   image: MediaSource;
   caption?: string;
@@ -136,7 +160,8 @@ export interface StickerContent {
 }
 
 export type MessageContent = 
-  | TextContent 
+  | TextContent
+  | ButtonsContent
   | ImageContent 
   | VideoContent 
   | AudioContent

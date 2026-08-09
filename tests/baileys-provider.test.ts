@@ -14,7 +14,17 @@ const mocks = vi.hoisted(() => {
   const sendPresenceUpdate = vi.fn(async () => undefined);
   const presenceSubscribe = vi.fn(async () => undefined);
   const downloadMediaMessage = vi.fn(async () => Buffer.from('media-bytes'));
+  const generateWAMessageFromContent = vi.fn((jid: string, message: unknown) => ({
+    key: {
+      id: 'interactive-message-id',
+      remoteJid: jid,
+      fromMe: true,
+    },
+    message,
+  }));
+  const relayMessage = vi.fn(async () => 'interactive-message-id');
   const socket = {
+    user: { id: '5511999999999:1@s.whatsapp.net' },
     ev: {
       on: vi.fn((event: string, listener: (payload: never) => void) => {
         handlers.set(event, listener);
@@ -27,6 +37,7 @@ const mocks = vi.hoisted(() => {
     sendPresenceUpdate,
     presenceSubscribe,
     downloadMediaMessage,
+    relayMessage,
     groupMetadata: vi.fn(async () => ({
       id: '123@g.us',
       subject: 'WhaNext',
@@ -48,6 +59,8 @@ const mocks = vi.hoisted(() => {
     sendPresenceUpdate,
     presenceSubscribe,
     downloadMediaMessage,
+    generateWAMessageFromContent,
+    relayMessage,
     socket,
     socketOptions,
     waitForConnectionUpdate,
@@ -67,11 +80,20 @@ vi.mock('@whiskeysockets/baileys', () => ({
     badSession: 500,
   },
   downloadMediaMessage: mocks.downloadMediaMessage,
+  generateWAMessageFromContent: mocks.generateWAMessageFromContent,
+  isJidGroup: (jid: string) => jid.endsWith('@g.us'),
   makeWASocket: (options: unknown) => {
     mocks.socketOptions.push(options);
     return mocks.socket;
   },
-  proto: { PinInChat: { Type: { PIN_FOR_ALL: 1, UNPIN_FOR_ALL: 2 } } },
+  proto: {
+    Message: {
+      InteractiveMessage: {
+        create: (value: unknown) => value,
+      },
+    },
+    PinInChat: { Type: { PIN_FOR_ALL: 1, UNPIN_FOR_ALL: 2 } },
+  },
   useMultiFileAuthState: async () => ({
     state: { creds: { registered: false } },
     saveCreds: async () => undefined,
@@ -154,6 +176,124 @@ describe('BaileysProvider pairing', () => {
     expect(second).toBe(third);
     expect(third).toBe(fourth);
     expect(mocks.socket.groupMetadata).toHaveBeenCalledOnce();
+  });
+
+  it('sends copy and link buttons through a native flow interactive message', async () => {
+    const provider = new BaileysProvider({ auth: './session', browser: Browser.Windows });
+    await provider.connect();
+
+    const sent = await provider.sendMessage('123@g.us', {
+      title: 'Acesso',
+      text: 'Escolha uma ação.',
+      footer: 'WhaNext',
+      buttons: [
+        { type: 'copy', label: 'Copiar código', code: 'ABC-123' },
+        { type: 'link', label: 'Abrir painel', url: 'https://example.com' },
+      ],
+    });
+
+    expect(mocks.generateWAMessageFromContent).toHaveBeenCalledWith(
+      '123@g.us',
+      {
+        interactiveMessage: {
+          header: { title: 'Acesso', hasMediaAttachment: false },
+          body: { text: 'Escolha uma ação.' },
+          footer: { text: 'WhaNext' },
+          nativeFlowMessage: {
+            buttons: [
+              {
+                name: 'cta_copy',
+                buttonParamsJson: JSON.stringify({
+                  display_text: 'Copiar código',
+                  copy_code: 'ABC-123',
+                }),
+              },
+              {
+                name: 'cta_url',
+                buttonParamsJson: JSON.stringify({
+                  display_text: 'Abrir painel',
+                  url: 'https://example.com',
+                  merchant_url: 'https://example.com',
+                }),
+              },
+            ],
+            messageParamsJson: '{}',
+            messageVersion: 1,
+          },
+        },
+      },
+      { userJid: '5511999999999:1@s.whatsapp.net' },
+    );
+    expect(mocks.relayMessage).toHaveBeenCalledWith(
+      '123@g.us',
+      expect.objectContaining({ interactiveMessage: expect.any(Object) }),
+      {
+        messageId: 'interactive-message-id',
+        additionalNodes: [
+          {
+            tag: 'biz',
+            attrs: {
+              actual_actors: '2',
+              host_storage: '2',
+              privacy_mode_ts: expect.any(String),
+            },
+            content: [
+              {
+                tag: 'interactive',
+                attrs: { type: 'native_flow', v: '1' },
+                content: [
+                  {
+                    tag: 'native_flow',
+                    attrs: { v: '9', name: 'mixed' },
+                  },
+                ],
+              },
+              {
+                tag: 'quality_control',
+                attrs: { source_type: 'third_party' },
+              },
+            ],
+          },
+        ],
+      },
+    );
+    expect(sent.id).toBe('interactive-message-id');
+  });
+
+  it('keeps reply context when sending buttons', async () => {
+    const provider = new BaileysProvider({ auth: './session', browser: Browser.Windows });
+    await provider.connect();
+
+    await provider.sendMessage(
+      '123@g.us',
+      {
+        text: 'Copie abaixo.',
+        buttons: [{ type: 'copy', label: 'Copiar', code: '123456' }],
+      },
+      {
+        id: 'quoted-id',
+        chatId: '123@g.us',
+        fromMe: false,
+        participantId: '200000000000001@lid',
+      },
+    );
+
+    expect(mocks.generateWAMessageFromContent).toHaveBeenLastCalledWith(
+      '123@g.us',
+      expect.any(Object),
+      {
+        userJid: '5511999999999:1@s.whatsapp.net',
+        quoted: {
+          key: {
+            id: 'quoted-id',
+            remoteJid: '123@g.us',
+            fromMe: false,
+            participant: '200000000000001@lid',
+          },
+          message: { conversation: '' },
+        },
+      },
+    );
   });
 
   it('invalidates provider metadata when a group event arrives', async () => {

@@ -2,10 +2,13 @@ import {
   Browsers,
   DisconnectReason,
   downloadMediaMessage,
+  generateWAMessageFromContent,
+  isJidGroup,
   makeWASocket,
   proto,
   useMultiFileAuthState,
   type AnyMessageContent,
+  type BinaryNode,
   type GroupMetadata,
   type WACallEvent,
   type WAMessage,
@@ -22,6 +25,7 @@ import type {
   GroupSnapshot,
 } from '@/models/group.js';
 import type {
+  ButtonsContent,
   MediaSource,
   DownloadedMedia,
   MentionTarget,
@@ -224,6 +228,10 @@ export class BaileysProvider implements WhatsAppProvider {
     content: MessageContent,
     replyTo?: MessageKey,
   ): Promise<SentMessage> {
+    if ('buttons' in content) {
+      return this.#sendButtons(chatId, content, replyTo);
+    }
+
     const socket = this.#requireSocket();
     const options = replyTo
       ? {
@@ -537,6 +545,133 @@ export class BaileysProvider implements WhatsAppProvider {
     }
 
     return this.#socket;
+  }
+
+  async #sendButtons(
+    chatId: string,
+    content: ButtonsContent,
+    replyTo?: MessageKey,
+  ): Promise<SentMessage> {
+    const socket = this.#requireSocket();
+    const userJid = socket.user?.id;
+
+    if (!userJid) {
+      throw new WhaNextError(
+        'PROVIDER_ERROR',
+        'WhatsApp did not expose the current account identity for the interactive message.',
+      );
+    }
+
+    const interactiveMessage = proto.Message.InteractiveMessage.create({
+      ...(content.title !== undefined
+        ? {
+            header: {
+              title: content.title,
+              hasMediaAttachment: false,
+            },
+          }
+        : {}),
+      body: { text: content.text },
+      ...(content.footer !== undefined
+        ? { footer: { text: content.footer } }
+        : {}),
+      ...(content.mentions && content.mentions.length > 0
+        ? {
+            contextInfo: {
+              mentionedJid: this.#mentions(content.mentions),
+            },
+          }
+        : {}),
+      nativeFlowMessage: {
+        buttons: content.buttons.map((button) => {
+          if (button.type === 'copy') {
+            return {
+              name: 'cta_copy',
+              buttonParamsJson: JSON.stringify({
+                display_text: button.label,
+                copy_code: button.code,
+              }),
+            };
+          }
+
+          return {
+            name: 'cta_url',
+            buttonParamsJson: JSON.stringify({
+              display_text: button.label,
+              url: button.url,
+              merchant_url: button.url,
+            }),
+          };
+        }),
+        messageParamsJson: '{}',
+        messageVersion: 1,
+      },
+    });
+
+    const quoted = replyTo
+      ? {
+          key: this.#toWaKey(replyTo),
+          message: { conversation: '' },
+        } as WAMessage
+      : undefined;
+    const generated = generateWAMessageFromContent(
+      chatId,
+      { interactiveMessage },
+      {
+        userJid,
+        ...(quoted ? { quoted } : {}),
+      },
+    );
+    const messageId = generated.key.id;
+
+    if (!generated.message || !messageId) {
+      throw new WhaNextError(
+        'PROVIDER_ERROR',
+        'WhatsApp could not generate the interactive message.',
+      );
+    }
+
+    await socket.relayMessage(chatId, generated.message, {
+      messageId,
+      additionalNodes: this.#interactiveRelayNodes(chatId),
+    });
+    return this.#sent(generated);
+  }
+
+  #interactiveRelayNodes(chatId: string): BinaryNode[] {
+    const bizNode: BinaryNode = {
+      tag: 'biz',
+      attrs: {
+        actual_actors: '2',
+        host_storage: '2',
+        privacy_mode_ts: (Math.floor(Date.now() / 1000) - 77_980_457).toString(),
+      },
+      content: [
+        {
+          tag: 'interactive',
+          attrs: { type: 'native_flow', v: '1' },
+          content: [
+            {
+              tag: 'native_flow',
+              attrs: { v: '9', name: 'mixed' },
+            },
+          ],
+        },
+        {
+          tag: 'quality_control',
+          attrs: { source_type: 'third_party' },
+        },
+      ],
+    };
+
+    if (isJidGroup(chatId)) {
+      return [bizNode];
+    }
+
+    return [
+      { tag: 'bot', attrs: { biz_bot: '1' } },
+      bizNode,
+    ];
   }
 
   #toContent(content: MessageContent): AnyMessageContent {

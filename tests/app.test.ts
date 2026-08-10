@@ -254,6 +254,24 @@ describe('WhaNextApp', () => {
     expect(provider.calls.getGroup).toBe(2);
   });
 
+  it('emits deleted messages received from the provider', async () => {
+    const provider = new FakeProvider();
+    const app = await create({ provider });
+    const onDeleted = vi.fn();
+    app.on('messageDeleted', onDeleted);
+    const deletion = {
+      key: message.keys,
+      message,
+      deletedByMe: false,
+      deletedById: message.senderId,
+      deletedAt: new Date(),
+    };
+
+    await provider.events.emit('messageDeleted', deletion);
+
+    expect(onDeleted).toHaveBeenCalledWith(deletion);
+  });
+
   it('emits the call event received from the provider', async () => {
     const provider = new FakeProvider();
     const app = await create({ provider });

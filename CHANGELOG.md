@@ -1,6 +1,21 @@
 # Changelog
 
 
+## 0.16.0
+
+### Adicionado
+
+- Novo evento público `messageDeleted` em `app.on()` e `multi.on()`.
+- Novo tipo `MessageDeleted`, com chave da mensagem, payload original quando disponível, autor da revogação e horário da exclusão.
+- O provider Baileys passa a observar `messages.update` e reconhecer revogações sem expor tipos do Baileys à aplicação.
+- Mensagens revogadas permanecem no cache recente, permitindo `app.message.repost()` e `app.media.download()` enquanto a entrada estiver disponível.
+
+### Compatibilidade
+
+- A mudança é aditiva para consumidores da API pública.
+- Providers customizados passam a incluir `messageDeleted` em `ProviderEvents`.
+- Quando a mensagem original já saiu do cache, o evento continua sendo emitido sem o campo `message`.
+
 ## 0.15.0
 
 ### Adicionado

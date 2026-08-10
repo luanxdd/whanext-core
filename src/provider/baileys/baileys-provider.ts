@@ -435,6 +435,30 @@ export class BaileysProvider implements WhatsAppProvider {
       }
     });
 
+    socket.ev.on('messages.update', (updates) => {
+      for (const { key, update } of updates) {
+        if (update.message !== null || !key.id || !key.remoteJid) continue;
+
+        const stored = this.#messageStore.get(this.#messageStoreKey(key));
+        const message = stored ? normalizeBaileysMessage(stored) : undefined;
+        const deletionKey = update.key;
+        const deletedByMe = deletionKey?.fromMe === true;
+        const deletedById = deletionKey?.participant
+          ?? deletionKey?.participantAlt
+          ?? (deletedByMe
+            ? this.#socket?.user?.id
+            : deletionKey?.remoteJid ?? undefined);
+
+        void this.#events.emit('messageDeleted', {
+          key: message?.keys ?? normalizeKey(key),
+          ...(message ? { message } : {}),
+          deletedByMe,
+          ...(deletedById ? { deletedById } : {}),
+          deletedAt: new Date(),
+        });
+      }
+    });
+
     socket.ev.on('groups.update', (groups) => {
       for (const group of groups) {
         if (group.id) {

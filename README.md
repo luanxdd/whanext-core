@@ -37,7 +37,7 @@ await app.login({
 - Prefixo global e comandos declarativos com argumentos tipados.
 - Comandos exclusivos da conta conectada com `guards.owner()` ou `onlyOwner`.
 - Usuários normalizados entre JID, LID e PN.
-- Mensagens, replies, edição, exclusão, menções, mídias e download normalizado.
+- Mensagens, replies, edição, exclusão, revogações, menções, mídias e download normalizado.
 - Operações de grupos e membros com resultados idempotentes.
 - Cache de metadados transparente e substituível.
 - Mute permanente ou temporário com SQLite ou banco próprio.
@@ -158,6 +158,20 @@ if (principal?.isReady) {
 ```
 
 `multi.commands.command()`, `use()`, `onError()` e `load()` aplicam a mesma configuração de comandos a todas as contas. Dentro de um comando, `ctx.account.id` informa qual conta recebeu e executou aquela interação. Eventos também podem ser observados em conjunto com `multi.on()`.
+
+## Mensagens apagadas
+
+Revogações recebidas pelo WhatsApp são expostas pelo evento `messageDeleted`. Quando a mensagem original ainda estiver no cache recente, o payload inclui `message`, que pode ser republicada ou usada para baixar a mídia pelas APIs existentes.
+
+```ts
+app.on('messageDeleted', async ({ message, deletedByMe }) => {
+  if (!message || deletedByMe) return;
+
+  await app.message.repost(message, app.account.selfChatId);
+});
+```
+
+O evento também informa `deletedById` quando o WhatsApp fornece a identidade responsável pela revogação.
 
 ## Logging
 

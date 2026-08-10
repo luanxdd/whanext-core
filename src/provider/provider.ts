@@ -7,6 +7,7 @@ import type {
 import type {
   Message,
   MessageContent,
+  MessageDeleted,
   MessageKey,
   DownloadedMedia,
   RepostMessageOptions,
@@ -44,6 +45,7 @@ export interface ConnectionUpdate {
 
 export interface ProviderEvents {
   message: Message;
+  messageDeleted: MessageDeleted;
   connection: ConnectionUpdate;
   groupChanged: { groupId: string };
   groupParticipantsChanged: GroupParticipantsChanged;

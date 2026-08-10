@@ -137,6 +137,7 @@ export type {
   MessageButton,
   Message,
   MessageContent,
+  MessageDeleted,
   MessageKey,
   MessageMedia,
   QuotedMessage,

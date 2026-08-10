@@ -542,6 +542,109 @@ describe('BaileysProvider pairing', () => {
     );
   });
 
+  it('emits deleted messages with the original cached payload', async () => {
+    const provider = new BaileysProvider({ auth: './session', browser: Browser.Windows });
+    await provider.connect();
+    const onDeleted = vi.fn();
+    provider.on('messageDeleted', onDeleted);
+    const emitMessages = mocks.handlers.get('messages.upsert') as
+      | ((update: unknown) => void)
+      | undefined;
+    const emitUpdates = mocks.handlers.get('messages.update') as
+      | ((updates: unknown[]) => void)
+      | undefined;
+
+    emitMessages?.({
+      type: 'notify',
+      messages: [{
+        key: {
+          id: 'deleted-1',
+          remoteJid: '123@g.us',
+          participant: '200000000000001@lid',
+          fromMe: false,
+        },
+        pushName: 'Luan',
+        messageTimestamp: 1_700_000_000,
+        message: { conversation: 'mensagem original' },
+      }],
+    });
+
+    emitUpdates?.([{
+      key: {
+        id: 'deleted-1',
+        remoteJid: '123@g.us',
+        participant: '200000000000001@lid',
+        fromMe: false,
+      },
+      update: {
+        message: null,
+        key: {
+          id: 'revoke-1',
+          remoteJid: '123@g.us',
+          participant: '200000000000001@lid',
+          fromMe: false,
+        },
+      },
+    }]);
+
+    expect(onDeleted).toHaveBeenCalledOnce();
+    expect(onDeleted).toHaveBeenCalledWith(expect.objectContaining({
+      key: {
+        id: 'deleted-1',
+        chatId: '123@g.us',
+        fromMe: false,
+        participantId: '200000000000001@lid',
+      },
+      deletedByMe: false,
+      deletedById: '200000000000001@lid',
+      deletedAt: expect.any(Date),
+      message: expect.objectContaining({
+        id: 'deleted-1',
+        chatId: '123@g.us',
+        text: 'mensagem original',
+        senderId: '200000000000001@lid',
+      }),
+    }));
+  });
+
+  it('emits deletion metadata even when the original message is no longer cached', async () => {
+    const provider = new BaileysProvider({ auth: './session', browser: Browser.Windows });
+    await provider.connect();
+    const onDeleted = vi.fn();
+    provider.on('messageDeleted', onDeleted);
+    const emitUpdates = mocks.handlers.get('messages.update') as
+      | ((updates: unknown[]) => void)
+      | undefined;
+
+    emitUpdates?.([{
+      key: {
+        id: 'missing-1',
+        remoteJid: '5511888888888@s.whatsapp.net',
+        fromMe: false,
+      },
+      update: {
+        message: null,
+        key: {
+          id: 'revoke-2',
+          remoteJid: '5511888888888@s.whatsapp.net',
+          fromMe: false,
+        },
+      },
+    }]);
+
+    expect(onDeleted).toHaveBeenCalledWith(expect.objectContaining({
+      key: {
+        id: 'missing-1',
+        chatId: '5511888888888@s.whatsapp.net',
+        fromMe: false,
+      },
+      deletedByMe: false,
+      deletedById: '5511888888888@s.whatsapp.net',
+      deletedAt: expect.any(Date),
+    }));
+    expect(onDeleted.mock.calls[0]?.[0]).not.toHaveProperty('message');
+  });
+
   it('normalizes participant changes received from the socket', async () => {
     const provider = new BaileysProvider({ auth: './session', browser: Browser.Windows });
     await provider.connect();

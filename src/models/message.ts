@@ -53,6 +53,14 @@ export interface QuotedMessage {
   media?: MessageMedia;
 }
 
+export interface MessageDeleted {
+  key: MessageKey;
+  message?: Message;
+  deletedByMe: boolean;
+  deletedById?: string;
+  deletedAt: Date;
+}
+
 export interface Message {
   id: string;
   jid: string;

@@ -61,6 +61,15 @@ export interface MessageDeleted {
   deletedAt: Date;
 }
 
+export interface MessageEdited {
+  key: MessageKey;
+  previous?: Message;
+  message: Message;
+  editedByMe: boolean;
+  editedById?: string;
+  editedAt: Date;
+}
+
 export interface Message {
   id: string;
   jid: string;

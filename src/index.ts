@@ -138,6 +138,7 @@ export type {
   Message,
   MessageContent,
   MessageDeleted,
+  MessageEdited,
   MessageKey,
   MessageMedia,
   QuotedMessage,

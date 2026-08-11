@@ -437,24 +437,64 @@ export class BaileysProvider implements WhatsAppProvider {
 
     socket.ev.on('messages.update', (updates) => {
       for (const { key, update } of updates) {
-        if (update.message !== null || !key.id || !key.remoteJid) continue;
+        if (!key.id || !key.remoteJid) continue;
 
         const stored = this.#messageStore.get(this.#messageStoreKey(key));
-        const message = stored ? normalizeBaileysMessage(stored) : undefined;
-        const deletionKey = update.key;
-        const deletedByMe = deletionKey?.fromMe === true;
-        const deletedById = deletionKey?.participant
-          ?? deletionKey?.participantAlt
-          ?? (deletedByMe
-            ? this.#socket?.user?.id
-            : deletionKey?.remoteJid ?? undefined);
 
-        void this.#events.emit('messageDeleted', {
-          key: message?.keys ?? normalizeKey(key),
-          ...(message ? { message } : {}),
-          deletedByMe,
-          ...(deletedById ? { deletedById } : {}),
-          deletedAt: new Date(),
+        if (update.message === null) {
+          const message = stored ? normalizeBaileysMessage(stored) : undefined;
+          const deletionKey = update.key;
+          const deletedByMe = deletionKey?.fromMe === true;
+          const deletedById = deletionKey?.participant
+            ?? deletionKey?.participantAlt
+            ?? (deletedByMe
+              ? this.#socket?.user?.id
+              : deletionKey?.remoteJid ?? undefined);
+
+          void this.#events.emit('messageDeleted', {
+            key: message?.keys ?? normalizeKey(key),
+            ...(message ? { message } : {}),
+            deletedByMe,
+            ...(deletedById ? { deletedById } : {}),
+            deletedAt: new Date(),
+          });
+          continue;
+        }
+
+        if (!update.message?.editedMessage?.message) continue;
+
+        const editedRaw: WAMessage = {
+          ...(stored ?? {}),
+          key: {
+            ...(stored?.key ?? {}),
+            ...key,
+          },
+          message: update.message,
+          messageTimestamp: update.messageTimestamp
+            ?? stored?.messageTimestamp
+            ?? Math.floor(Date.now() / 1_000),
+        };
+        const previous = stored ? normalizeBaileysMessage(stored) : undefined;
+        const message = normalizeBaileysMessage(editedRaw);
+
+        if (!message) continue;
+
+        this.#remember(editedRaw);
+
+        const editedByMe = key.fromMe === true;
+        const editedById = key.participant
+          ?? key.participantAlt
+          ?? (editedByMe
+            ? this.#socket?.user?.id
+            : key.remoteJid ?? undefined);
+
+        void this.#events.emit('messageEdited', {
+          key: message.keys,
+          ...(previous ? { previous } : {}),
+          message,
+          editedByMe,
+          ...(editedById ? { editedById } : {}),
+          editedAt: message.timestamp,
         });
       }
     });

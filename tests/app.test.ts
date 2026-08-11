@@ -272,6 +272,25 @@ describe('WhaNextApp', () => {
     expect(onDeleted).toHaveBeenCalledWith(deletion);
   });
 
+  it('emits edited messages received from the provider', async () => {
+    const provider = new FakeProvider();
+    const app = await create({ provider });
+    const onEdited = vi.fn();
+    app.on('messageEdited', onEdited);
+    const edit = {
+      key: message.keys,
+      previous: message,
+      message: { ...message, text: 'mensagem editada' },
+      editedByMe: false,
+      editedById: message.senderId,
+      editedAt: new Date(),
+    };
+
+    await provider.events.emit('messageEdited', edit);
+
+    expect(onEdited).toHaveBeenCalledWith(edit);
+  });
+
   it('emits the call event received from the provider', async () => {
     const provider = new FakeProvider();
     const app = await create({ provider });

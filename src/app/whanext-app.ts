@@ -18,6 +18,7 @@ import type { GroupParticipantsChanged } from '@/models/group.js';
 import type {
   Message,
   MessageDeleted,
+  MessageEdited,
 } from '@/models/message.js';
 import type { MuteOptions } from '@/mute/mute-store.js';
 import {
@@ -41,6 +42,7 @@ import { UserService } from '@/services/user-service.js';
 export interface AppEvents {
   message: Message;
   messageDeleted: MessageDeleted;
+  messageEdited: MessageEdited;
   connection: ConnectionUpdate;
   error: WhaNextError;
   mute: MuteEnforcement;
@@ -272,6 +274,16 @@ export class WhaNextApp {
         cached: deletion.message !== undefined,
       });
       await this.#events.emit('messageDeleted', deletion);
+    });
+
+    this.#provider.on('messageEdited', async (edit) => {
+      this.logger.debug('Message edited', {
+        chatId: edit.key.chatId,
+        messageId: edit.key.id,
+        editedByMe: edit.editedByMe,
+        cached: edit.previous !== undefined,
+      });
+      await this.#events.emit('messageEdited', edit);
     });
 
     this.#provider.on('message', async (message) => {

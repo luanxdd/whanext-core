@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.17.0
+
+### Adicionado
+
+- Novo evento público `messageEdited` em `app.on()` e `multi.on()`.
+- Novo tipo `MessageEdited`, com versão anterior quando ainda estiver no cache, versão atual, identidade responsável e horário da edição.
+- O provider Baileys passa a interpretar atualizações `editedMessage` recebidas em `messages.update`.
+- O cache recente é atualizado após cada edição, permitindo acompanhar múltiplas alterações da mesma mensagem em sequência.
+
+### Compatibilidade
+
+- A mudança é aditiva para consumidores da API pública.
+- Providers customizados passam a incluir `messageEdited` em `ProviderEvents`.
+- Quando a versão anterior já saiu do cache, o evento continua sendo emitido sem o campo `previous`.
+
 
 ## 0.16.0
 

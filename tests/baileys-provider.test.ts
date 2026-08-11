@@ -100,7 +100,22 @@ vi.mock('@whiskeysockets/baileys', () => ({
   }),
   extractMessageContent: (message: unknown) => message,
   getContentType: (message: Record<string, unknown>) => Object.keys(message)[0],
-  normalizeMessageContent: (message: unknown) => message,
+  normalizeMessageContent: (message: unknown) => {
+    let current = message as Record<string, any> | undefined;
+
+    for (let index = 0; index < 5; index += 1) {
+      const nested = current?.editedMessage?.message
+        ?? current?.ephemeralMessage?.message
+        ?? current?.viewOnceMessage?.message
+        ?? current?.viewOnceMessageV2?.message
+        ?? current?.viewOnceMessageV2Extension?.message;
+
+      if (!nested) break;
+      current = nested;
+    }
+
+    return current;
+  },
 }));
 
 import { Browser } from '@/auth/browser.js';
@@ -643,6 +658,160 @@ describe('BaileysProvider pairing', () => {
       deletedAt: expect.any(Date),
     }));
     expect(onDeleted.mock.calls[0]?.[0]).not.toHaveProperty('message');
+  });
+
+  it('emits edited messages with the previous cached version', async () => {
+    const provider = new BaileysProvider({ auth: './session', browser: Browser.Windows });
+    await provider.connect();
+    const onEdited = vi.fn();
+    provider.on('messageEdited', onEdited);
+    const emitMessages = mocks.handlers.get('messages.upsert') as
+      | ((update: unknown) => void)
+      | undefined;
+    const emitUpdates = mocks.handlers.get('messages.update') as
+      | ((updates: unknown[]) => void)
+      | undefined;
+
+    emitMessages?.({
+      type: 'notify',
+      messages: [{
+        key: {
+          id: 'edited-1',
+          remoteJid: '123@g.us',
+          participant: '200000000000001@lid',
+          fromMe: false,
+        },
+        pushName: 'Luan',
+        messageTimestamp: 1_700_000_000,
+        message: { conversation: 'antes' },
+      }],
+    });
+
+    emitUpdates?.([{
+      key: {
+        id: 'edited-1',
+        remoteJid: '123@g.us',
+        participant: '200000000000001@lid',
+        fromMe: false,
+      },
+      update: {
+        message: {
+          editedMessage: {
+            message: { conversation: 'depois' },
+          },
+        },
+        messageTimestamp: 1_700_000_100,
+      },
+    }]);
+
+    expect(onEdited).toHaveBeenCalledOnce();
+    expect(onEdited).toHaveBeenCalledWith(expect.objectContaining({
+      key: {
+        id: 'edited-1',
+        chatId: '123@g.us',
+        fromMe: false,
+        participantId: '200000000000001@lid',
+      },
+      editedByMe: false,
+      editedById: '200000000000001@lid',
+      editedAt: new Date(1_700_000_100 * 1_000),
+      previous: expect.objectContaining({
+        text: 'antes',
+      }),
+      message: expect.objectContaining({
+        id: 'edited-1',
+        text: 'depois',
+        senderId: '200000000000001@lid',
+      }),
+    }));
+  });
+
+  it('keeps the latest edited version in the recent-message cache', async () => {
+    const provider = new BaileysProvider({ auth: './session', browser: Browser.Windows });
+    await provider.connect();
+    const onEdited = vi.fn();
+    provider.on('messageEdited', onEdited);
+    const emitMessages = mocks.handlers.get('messages.upsert') as
+      | ((update: unknown) => void)
+      | undefined;
+    const emitUpdates = mocks.handlers.get('messages.update') as
+      | ((updates: unknown[]) => void)
+      | undefined;
+
+    emitMessages?.({
+      type: 'notify',
+      messages: [{
+        key: {
+          id: 'edited-chain',
+          remoteJid: '5511888888888@s.whatsapp.net',
+          fromMe: false,
+        },
+        messageTimestamp: 1_700_000_000,
+        message: { conversation: 'primeira' },
+      }],
+    });
+
+    emitUpdates?.([{
+      key: {
+        id: 'edited-chain',
+        remoteJid: '5511888888888@s.whatsapp.net',
+        fromMe: false,
+      },
+      update: {
+        message: { editedMessage: { message: { conversation: 'segunda' } } },
+        messageTimestamp: 1_700_000_100,
+      },
+    }]);
+
+    emitUpdates?.([{
+      key: {
+        id: 'edited-chain',
+        remoteJid: '5511888888888@s.whatsapp.net',
+        fromMe: false,
+      },
+      update: {
+        message: { editedMessage: { message: { conversation: 'terceira' } } },
+        messageTimestamp: 1_700_000_200,
+      },
+    }]);
+
+    expect(onEdited).toHaveBeenCalledTimes(2);
+    expect(onEdited.mock.calls[1]?.[0]).toMatchObject({
+      previous: { text: 'segunda' },
+      message: { text: 'terceira' },
+    });
+  });
+
+  it('emits edited content even when the previous version is no longer cached', async () => {
+    const provider = new BaileysProvider({ auth: './session', browser: Browser.Windows });
+    await provider.connect();
+    const onEdited = vi.fn();
+    provider.on('messageEdited', onEdited);
+    const emitUpdates = mocks.handlers.get('messages.update') as
+      | ((updates: unknown[]) => void)
+      | undefined;
+
+    emitUpdates?.([{
+      key: {
+        id: 'edited-missing',
+        remoteJid: '5511888888888@s.whatsapp.net',
+        fromMe: false,
+      },
+      update: {
+        message: { editedMessage: { message: { conversation: 'nova versão' } } },
+        messageTimestamp: 1_700_000_300,
+      },
+    }]);
+
+    expect(onEdited).toHaveBeenCalledWith(expect.objectContaining({
+      editedByMe: false,
+      editedById: '5511888888888@s.whatsapp.net',
+      message: expect.objectContaining({
+        id: 'edited-missing',
+        text: 'nova versão',
+      }),
+    }));
+    expect(onEdited.mock.calls[0]?.[0]).not.toHaveProperty('previous');
   });
 
   it('normalizes participant changes received from the socket', async () => {

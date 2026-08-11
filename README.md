@@ -173,6 +173,20 @@ app.on('messageDeleted', async ({ message, deletedByMe }) => {
 
 O evento também informa `deletedById` quando o WhatsApp fornece a identidade responsável pela revogação.
 
+## Mensagens editadas
+
+Edições recebidas pelo WhatsApp são expostas pelo evento `messageEdited`. Quando a versão anterior ainda estiver no cache recente, o payload inclui `previous`; `message` contém a versão atual.
+
+```ts
+app.on('messageEdited', async ({ previous, message, editedByMe }) => {
+  if (!previous || editedByMe) return;
+
+  console.log(previous.text, message.text);
+});
+```
+
+Após cada edição, a nova versão substitui a anterior no cache recente. Assim, edições consecutivas da mesma mensagem sempre comparam a versão atual com a imediatamente anterior.
+
 ## Logging
 
 O nível padrão é `info`. Estão disponíveis `debug`, `info`, `warn`, `error` e `silent`.

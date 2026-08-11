@@ -1,3 +1,4 @@
+import { createCipheriv, hkdfSync } from 'node:crypto';
 import {
   beforeEach,
   describe,
@@ -24,7 +25,10 @@ const mocks = vi.hoisted(() => {
   }));
   const relayMessage = vi.fn(async () => 'interactive-message-id');
   const socket = {
-    user: { id: '5511999999999:1@s.whatsapp.net' },
+    user: {
+      id: '5511999999999:1@s.whatsapp.net',
+      lid: '100000000000001:1@lid',
+    },
     ev: {
       on: vi.fn((event: string, listener: (payload: never) => void) => {
         handlers.set(event, listener);
@@ -86,11 +90,19 @@ vi.mock('@whiskeysockets/baileys', () => ({
     mocks.socketOptions.push(options);
     return mocks.socket;
   },
+  jidNormalizedUser: (jid: string) => jid.replace(/:\d+@/, '@'),
   proto: {
     Message: {
       InteractiveMessage: {
         create: (value: unknown) => value,
       },
+      ProtocolMessage: {
+        Type: { MESSAGE_EDIT: 14 },
+      },
+      SecretEncryptedMessage: {
+        SecretEncType: { MESSAGE_EDIT: 1 },
+      },
+      decode: (value: Uint8Array) => JSON.parse(Buffer.from(value).toString('utf8')),
     },
     PinInChat: { Type: { PIN_FOR_ALL: 1, UNPIN_FOR_ALL: 2 } },
   },
@@ -722,6 +734,220 @@ describe('BaileysProvider pairing', () => {
         id: 'edited-1',
         text: 'depois',
         senderId: '200000000000001@lid',
+      }),
+    }));
+  });
+
+  it('decrypts encrypted edit envelopes and normalizes the target perspective', async () => {
+    const provider = new BaileysProvider({ auth: './session', browser: Browser.Windows });
+    await provider.connect();
+    const onEdited = vi.fn();
+    provider.on('messageEdited', onEdited);
+    const emitMessages = mocks.handlers.get('messages.upsert') as
+      | ((update: unknown) => void)
+      | undefined;
+    const messageSecret = Buffer.alloc(32, 7);
+    const participant = '200000000000001@lid';
+    const messageId = 'secret-edit-1';
+
+    emitMessages?.({
+      type: 'notify',
+      messages: [{
+        key: {
+          id: messageId,
+          remoteJid: '123@g.us',
+          participant,
+          fromMe: false,
+        },
+        pushName: 'Luan',
+        messageTimestamp: 1_700_000_000,
+        message: {
+          conversation: 'antes',
+          messageContextInfo: { messageSecret },
+        },
+      }],
+    });
+
+    const makeEnvelope = (text: string, timestamp: number) => {
+      const info = Buffer.concat([
+        Buffer.from(messageId, 'utf8'),
+        Buffer.from(participant, 'utf8'),
+        Buffer.from(participant, 'utf8'),
+        Buffer.from('Message Edit', 'utf8'),
+      ]);
+      const key = Buffer.from(hkdfSync(
+        'sha256',
+        messageSecret,
+        Buffer.alloc(32),
+        info,
+        32,
+      ));
+      const iv = Buffer.alloc(12, timestamp % 251);
+      const cipher = createCipheriv('aes-256-gcm', key, iv);
+      cipher.setAAD(Buffer.alloc(0));
+      const clear = Buffer.from(JSON.stringify({
+        protocolMessage: {
+          type: 14,
+          editedMessage: { conversation: text },
+        },
+      }));
+      const encPayload = Buffer.concat([
+        cipher.update(clear),
+        cipher.final(),
+        cipher.getAuthTag(),
+      ]);
+
+      return {
+        key: {
+          id: `edit-envelope-${timestamp}`,
+          remoteJid: '123@g.us',
+          participant,
+          fromMe: false,
+        },
+        messageTimestamp: timestamp,
+        message: {
+          secretEncryptedMessage: {
+            targetMessageKey: {
+              id: messageId,
+              remoteJid: '123@g.us',
+              participant,
+              fromMe: true,
+            },
+            secretEncType: 1,
+            encPayload,
+            encIv: iv,
+          },
+        },
+      };
+    };
+
+    emitMessages?.({
+      type: 'notify',
+      messages: [makeEnvelope('depois', 1_700_000_100)],
+    });
+    emitMessages?.({
+      type: 'notify',
+      messages: [makeEnvelope('depois de novo', 1_700_000_200)],
+    });
+
+    expect(onEdited).toHaveBeenCalledTimes(2);
+    expect(onEdited.mock.calls[0]?.[0]).toMatchObject({
+      key: {
+        id: messageId,
+        chatId: '123@g.us',
+        fromMe: false,
+        participantId: participant,
+      },
+      editedByMe: false,
+      editedById: participant,
+      previous: { text: 'antes' },
+      message: { text: 'depois' },
+    });
+    expect(onEdited.mock.calls[1]?.[0]).toMatchObject({
+      previous: { text: 'depois' },
+      message: { text: 'depois de novo' },
+    });
+  });
+
+  it('decrypts direct encrypted edits using the editor perspective from the target key', async () => {
+    const provider = new BaileysProvider({ auth: './session', browser: Browser.Windows });
+    await provider.connect();
+    const onEdited = vi.fn();
+    provider.on('messageEdited', onEdited);
+    const emitMessages = mocks.handlers.get('messages.upsert') as
+      | ((update: unknown) => void)
+      | undefined;
+    const messageSecret = Buffer.alloc(32, 9);
+    const editor = '5511888888888@s.whatsapp.net';
+    const owner = '5511999999999@s.whatsapp.net';
+    const messageId = 'secret-edit-direct-1';
+
+    emitMessages?.({
+      type: 'notify',
+      messages: [{
+        key: {
+          id: messageId,
+          remoteJid: editor,
+          fromMe: false,
+        },
+        pushName: 'Contato',
+        messageTimestamp: 1_700_000_000,
+        message: {
+          conversation: 'antes',
+          messageContextInfo: { messageSecret },
+        },
+      }],
+    });
+
+    const info = Buffer.concat([
+      Buffer.from(messageId, 'utf8'),
+      Buffer.from(editor, 'utf8'),
+      Buffer.from(editor, 'utf8'),
+      Buffer.from('Message Edit', 'utf8'),
+    ]);
+    const key = Buffer.from(hkdfSync(
+      'sha256',
+      messageSecret,
+      Buffer.alloc(32),
+      info,
+      32,
+    ));
+    const iv = Buffer.alloc(12, 11);
+    const cipher = createCipheriv('aes-256-gcm', key, iv);
+    cipher.setAAD(Buffer.alloc(0));
+    const clear = Buffer.from(JSON.stringify({
+      protocolMessage: {
+        type: 14,
+        key: { id: messageId },
+        editedMessage: { conversation: 'depois' },
+        timestampMs: 1_700_000_100_000,
+      },
+    }));
+    const encPayload = Buffer.concat([
+      cipher.update(clear),
+      cipher.final(),
+      cipher.getAuthTag(),
+    ]);
+
+    emitMessages?.({
+      type: 'notify',
+      messages: [{
+        key: {
+          id: 'edit-envelope-direct-1',
+          remoteJid: editor,
+          fromMe: false,
+        },
+        messageTimestamp: 1_700_000_100,
+        message: {
+          secretEncryptedMessage: {
+            targetMessageKey: {
+              id: messageId,
+              remoteJid: owner,
+              fromMe: true,
+            },
+            secretEncType: 1,
+            encPayload,
+            encIv: iv,
+          },
+        },
+      }],
+    });
+
+    expect(onEdited).toHaveBeenCalledOnce();
+    expect(onEdited).toHaveBeenCalledWith(expect.objectContaining({
+      key: {
+        id: messageId,
+        chatId: editor,
+        fromMe: false,
+      },
+      editedByMe: false,
+      editedById: editor,
+      editedAt: new Date(1_700_000_100_000),
+      previous: expect.objectContaining({ text: 'antes' }),
+      message: expect.objectContaining({
+        id: messageId,
+        text: 'depois',
+        senderId: editor,
       }),
     }));
   });

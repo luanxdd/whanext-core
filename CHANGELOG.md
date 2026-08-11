@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.17.1
+
+### Fixed
+
+- Compatibilidade com o novo formato criptografado de edições do WhatsApp (`secretEncryptedMessage`).
+- O provider interpreta `targetMessageKey.fromMe` pela perspectiva do editor, deriva a chave com `messageSecret` e descriptografa edições com AES-256-GCM.
+- Edições em conversas privadas preservam a chave local da mensagem original após a descriptografia.
+- Edições consecutivas preservam o `messageSecret` no cache para que a versão anterior continue disponível.
+- `messageEdited` continua com a mesma API pública da 0.17.0.
+
 ## 0.17.0
 
 ### Adicionado

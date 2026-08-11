@@ -42,6 +42,11 @@ import {
   normalizeBaileysMessage,
   normalizeKey,
 } from '@/provider/baileys/normalize-message.js';
+import {
+  decryptSecretEncryptedEdit,
+  isSecretEncryptedEdit,
+  secretEditTargetKey,
+} from '@/provider/baileys/secret-edit.js';
 import { TypedEventEmitter } from '@/provider/event-emitter.js';
 import type {
   ParticipantAction,
@@ -425,6 +430,8 @@ export class BaileysProvider implements WhatsAppProvider {
       if (type !== 'notify') return;
 
       for (const raw of messages) {
+        if (this.#handleSecretEncryptedEdit(raw)) continue;
+
         if (raw.key.id && raw.message) this.#remember(raw);
 
         const quoted = extractQuotedBaileysMessage(raw);
@@ -474,28 +481,7 @@ export class BaileysProvider implements WhatsAppProvider {
             ?? stored?.messageTimestamp
             ?? Math.floor(Date.now() / 1_000),
         };
-        const previous = stored ? normalizeBaileysMessage(stored) : undefined;
-        const message = normalizeBaileysMessage(editedRaw);
-
-        if (!message) continue;
-
-        this.#remember(editedRaw);
-
-        const editedByMe = key.fromMe === true;
-        const editedById = key.participant
-          ?? key.participantAlt
-          ?? (editedByMe
-            ? this.#socket?.user?.id
-            : key.remoteJid ?? undefined);
-
-        void this.#events.emit('messageEdited', {
-          key: message.keys,
-          ...(previous ? { previous } : {}),
-          message,
-          editedByMe,
-          ...(editedById ? { editedById } : {}),
-          editedAt: message.timestamp,
-        });
+        this.#emitMessageEdited(key, editedRaw, stored);
       }
     });
 
@@ -866,6 +852,95 @@ export class BaileysProvider implements WhatsAppProvider {
       'accept',
     ];
     return known.find((value) => value === status) ?? 'timeout';
+  }
+
+  #handleSecretEncryptedEdit(raw: WAMessage): boolean {
+    if (!isSecretEncryptedEdit(raw)) return false;
+
+    const targetKey = secretEditTargetKey(raw);
+    if (!targetKey?.id) return true;
+
+    const stored = this.#findStoredMessage(targetKey);
+    if (!stored) return true;
+
+    try {
+      const decrypted = decryptSecretEncryptedEdit(
+        raw,
+        stored,
+        this.#socket?.user?.id,
+        this.#socket?.user?.lid,
+      );
+
+      if (!decrypted) return true;
+
+      const key: WAMessageKey = {
+        ...stored.key,
+        id: targetKey.id,
+      };
+      const editedRaw: WAMessage = {
+        ...stored,
+        key,
+        message: {
+          editedMessage: {
+            message: decrypted.message,
+          },
+        },
+        messageTimestamp: decrypted.timestamp
+          ?? raw.messageTimestamp
+          ?? stored.messageTimestamp
+          ?? Math.floor(Date.now() / 1_000),
+      };
+
+      this.#emitMessageEdited(key, editedRaw, stored);
+    } catch (error) {
+      this.#logger.warn('Could not decrypt the encrypted message edit.', {
+        messageId: targetKey.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+
+    return true;
+  }
+
+  #emitMessageEdited(
+    key: WAMessageKey,
+    editedRaw: WAMessage,
+    stored?: WAMessage,
+  ): void {
+    const previous = stored ? normalizeBaileysMessage(stored) : undefined;
+    const message = normalizeBaileysMessage(editedRaw);
+
+    if (!message) return;
+
+    this.#remember(editedRaw);
+
+    const editedByMe = key.fromMe === true;
+    const editedById = key.participant
+      ?? key.participantAlt
+      ?? (editedByMe
+        ? this.#socket?.user?.id
+        : key.remoteJid ?? undefined);
+
+    void this.#events.emit('messageEdited', {
+      key: message.keys,
+      ...(previous ? { previous } : {}),
+      message,
+      editedByMe,
+      ...(editedById ? { editedById } : {}),
+      editedAt: message.timestamp,
+    });
+  }
+
+  #findStoredMessage(key: WAMessageKey): WAMessage | undefined {
+    const direct = this.#messageStore.get(this.#messageStoreKey(key));
+    if (direct) return direct;
+    if (!key.id) return undefined;
+
+    for (const message of this.#messageStore.values()) {
+      if (message.key.id === key.id) return message;
+    }
+
+    return undefined;
   }
 
   #remember(message: WAMessage): void {

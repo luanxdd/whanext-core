@@ -175,7 +175,7 @@ O evento também informa `deletedById` quando o WhatsApp fornece a identidade re
 
 ## Mensagens editadas
 
-Edições recebidas pelo WhatsApp são expostas pelo evento `messageEdited`. Quando a versão anterior ainda estiver no cache recente, o payload inclui `previous`; `message` contém a versão atual.
+Edições recebidas pelo WhatsApp são expostas pelo evento `messageEdited`. A partir da 0.17.1, o provider inclui suporte ao envelope criptografado `secretEncryptedMessage` usado atualmente pelo WhatsApp para edições. Quando a versão anterior ainda estiver no cache recente, o payload inclui `previous`; `message` contém a versão atual.
 
 ```ts
 app.on('messageEdited', async ({ previous, message, editedByMe }) => {

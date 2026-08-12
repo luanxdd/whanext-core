@@ -29,7 +29,7 @@ jobs:
         run: npm install --global npm@11.5.1
 
       - name: Install dependencies
-        run: npm ci
+        run: npm install --no-audit --no-fund
 
       - name: Publish package
         run: npm publish --access public

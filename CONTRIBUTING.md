@@ -5,16 +5,16 @@ Obrigado pelo interesse em melhorar o projeto.
 ## Ambiente
 
 - Node.js 22.5 ou superior
-- npm compatível com o `package-lock.json`
+- npm ou pnpm compatível com o projeto
 
 ```bash
-npm ci
+npm install
 npm run check
 ```
 
 ## Princípios da API
 
-- Baileys permanece restrito ao provider interno.
+- Zapo permanece restrito ao provider interno; a API pública continua independente da implementação.
 - A API pública usa modelos e erros do WhaNext.
 - Operações dependentes de estado retornam resultados tipados e idempotentes.
 - JID, LID e PN são resolvidos pela biblioteca.

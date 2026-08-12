@@ -1,12 +1,12 @@
-import type { WAMessage } from '@whiskeysockets/baileys';
+import type { WaIncomingMessageEvent } from 'zapo-js';
 import {
   describe,
   expect,
   it,
 } from 'vitest';
-import { normalizeBaileysMessage } from '@/provider/baileys/normalize-message.js';
+import { normalizeZapoMessage } from '@/provider/zapo/normalize-message.js';
 
-function createMessage(message: Record<string, unknown>): WAMessage {
+function createMessage(message: Record<string, unknown>): WaIncomingMessageEvent {
   return {
     key: {
       id: 'message-id',
@@ -14,11 +14,11 @@ function createMessage(message: Record<string, unknown>): WAMessage {
       fromMe: false,
     },
     message,
-    messageTimestamp: 1,
-  } as unknown as WAMessage;
+    timestampSeconds: 1,
+  } as unknown as WaIncomingMessageEvent;
 }
 
-describe('Baileys message content classification', () => {
+describe('Zapo message content classification', () => {
   it.each([
     [{ conversation: 'hello' }, 'text'],
     [{ extendedTextMessage: { text: 'hello' } }, 'text'],
@@ -36,15 +36,13 @@ describe('Baileys message content classification', () => {
     [{ orderMessage: {} }, 'catalog'],
     [{ reactionMessage: { text: '👍' } }, 'unknown'],
   ] as const)('%j -> %s', (payload, expected) => {
-    const message = normalizeBaileysMessage(createMessage(payload));
+    const message = normalizeZapoMessage(createMessage(payload));
 
     expect(message?.contentKind).toBe(expected);
   });
 
-
-
   it('resolves the phone number from remoteJidAlt in private LID chats', () => {
-    const message = normalizeBaileysMessage({
+    const message = normalizeZapoMessage({
       key: {
         id: 'private-lid-message',
         remoteJid: '192758887264324@lid',
@@ -54,8 +52,8 @@ describe('Baileys message content classification', () => {
       message: {
         conversation: '×login',
       },
-      messageTimestamp: 1,
-    } as unknown as WAMessage);
+      timestampSeconds: 1,
+    } as unknown as WaIncomingMessageEvent);
 
     expect(message).toBeDefined();
     expect(message?.senderId).toBe('5531995724651@s.whatsapp.net');
@@ -68,8 +66,30 @@ describe('Baileys message content classification', () => {
     expect(message?.sender.phone).toBe('5531995724651');
   });
 
+  it('uses participantAlt to preserve PN and LID identities in groups', () => {
+    const message = normalizeZapoMessage({
+      key: {
+        id: 'group-lid-message',
+        remoteJid: '120363000000000000@g.us',
+        participant: '192758887264324@lid',
+        participantAlt: '5531995724651@s.whatsapp.net',
+        fromMe: false,
+      },
+      message: { conversation: 'oi' },
+      timestampSeconds: 1,
+    } as unknown as WaIncomingMessageEvent);
+
+    expect(message?.senderId).toBe('5531995724651@s.whatsapp.net');
+    expect(message?.senderIds).toEqual([
+      '192758887264324@lid',
+      '5531995724651@s.whatsapp.net',
+    ]);
+    expect(message?.senderLid).toBe('192758887264324@lid');
+    expect(message?.senderJid).toBe('5531995724651@s.whatsapp.net');
+  });
+
   it('does not treat remoteJidAlt as the sender of fromMe private messages', () => {
-    const message = normalizeBaileysMessage({
+    const message = normalizeZapoMessage({
       key: {
         id: 'private-from-me',
         remoteJid: '192758887264324@lid',
@@ -79,17 +99,17 @@ describe('Baileys message content classification', () => {
       message: {
         conversation: 'mensagem enviada',
       },
-      messageTimestamp: 1,
-    } as unknown as WAMessage);
+      timestampSeconds: 1,
+    } as unknown as WaIncomingMessageEvent);
 
     expect(message).toBeDefined();
     expect(message?.sender.phone).toBeUndefined();
     expect(message?.senderId).toBe('192758887264324@lid');
   });
 
-  it('preserves view-once metadata from the Baileys wrapper', () => {
-    const message = normalizeBaileysMessage(createMessage({
-      viewOnceMessageV2Extension: {
+  it('preserves view-once metadata from the Zapo wrapper', () => {
+    const message = normalizeZapoMessage(createMessage({
+      viewOnceMessageV2: {
         message: {
           imageMessage: {
             mimetype: 'image/jpeg',
@@ -111,14 +131,14 @@ describe('Baileys message content classification', () => {
   });
 
   it('exposes view-once metadata on quoted media', () => {
-    const message = normalizeBaileysMessage(createMessage({
+    const message = normalizeZapoMessage(createMessage({
       extendedTextMessage: {
         text: 'kkkk',
         contextInfo: {
           stanzaId: 'view-once-id',
           participant: '5511888888888@s.whatsapp.net',
           quotedMessage: {
-            viewOnceMessageV2Extension: {
+            viewOnceMessageV2: {
               message: {
                 videoMessage: {
                   mimetype: 'video/mp4',
@@ -150,7 +170,7 @@ describe('Baileys message content classification', () => {
   });
 
   it('keeps media metadata independent from content classification', () => {
-    const message = normalizeBaileysMessage(createMessage({
+    const message = normalizeZapoMessage(createMessage({
       imageMessage: {
         mimetype: 'image/jpeg',
         caption: 'photo',
@@ -160,6 +180,7 @@ describe('Baileys message content classification', () => {
     expect(message).toMatchObject({
       contentKind: 'image',
       hasMedia: true,
+      caption: 'photo',
       media: {
         kind: 'image',
         mimetype: 'image/jpeg',

@@ -8,5 +8,10 @@ export default defineConfig({
   clean: true,
   splitting: false,
   target: 'node22',
-  external: ['@whiskeysockets/baileys'],
+  external: [
+    'zapo-js',
+    '@zapo-js/store-sqlite',
+    '@zapo-js/media-utils',
+    '@zapo-js/voip',
+  ],
 });

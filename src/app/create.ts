@@ -7,7 +7,7 @@ import {
   type LoggerConfig,
 } from '@/logger/logger.js';
 import type { MuteOptions } from '@/mute/mute-store.js';
-import { BaileysProvider } from '@/provider/baileys/baileys-provider.js';
+import { ZapoProvider } from '@/provider/zapo/zapo-provider.js';
 import type { WhatsAppProvider } from '@/provider/provider.js';
 
 export interface ReconnectOptions {
@@ -28,27 +28,24 @@ export interface CreateOptions {
   router?: Omit<RouterOptions, 'prefix'>;
   reconnect?: ReconnectOptions;
   messageCacheSize?: number;
+  processOfflineMessages?: boolean;
   provider?: WhatsAppProvider;
   accountId?: string;
 }
 
 export async function create(options: CreateOptions = {}): Promise<WhaNextApp> {
   const logger = new Logger(options.logger);
-  const provider = options.provider ?? new BaileysProvider({
+  const provider = options.provider ?? new ZapoProvider({
     auth: options.auth ?? './session',
     browser: options.browser ?? Browser.Windows,
     logger: logger.child('provider'),
+    ...(options.accountId ? { sessionId: options.accountId } : {}),
     ...(options.messageCacheSize !== undefined
       ? { messageCacheSize: options.messageCacheSize }
       : {}),
-    groupMetadataCache: {
-      ...(options.cache?.groupTtlMs !== undefined
-        ? { ttlMs: options.cache.groupTtlMs }
-        : {}),
-      ...(options.cache?.memoryMaxEntries !== undefined
-        ? { maxEntries: options.cache.memoryMaxEntries }
-        : {}),
-    },
+    ...(options.processOfflineMessages !== undefined
+      ? { processOfflineMessages: options.processOfflineMessages }
+      : {}),
     ...(options.reconnect ? { reconnect: options.reconnect } : {}),
   });
 

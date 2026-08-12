@@ -19,7 +19,7 @@ export type MediaKind =
  *
  * `media.kind` remains the source of truth for downloadable media.
  * `contentKind` additionally exposes non-media payloads such as locations,
- * contacts, polls and catalog/product messages without leaking Baileys types.
+ * contacts, polls and catalog/product messages without leaking provider-specific protocol types.
  */
 export type MessageContentKind =
   | 'text'

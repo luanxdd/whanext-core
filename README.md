@@ -31,7 +31,7 @@ await app.login({
 
 ## Por que WhaNext?
 
-- API pública sem objetos ou tipos crus do Baileys.
+- API pública independente do provider, sem objetos ou tipos crus do Zapo.
 - Login por pairing code, sessão persistente e reconexão automática.
 - Uma ou várias contas independentes no mesmo processo com `createMulti()`.
 - Prefixo global e comandos declarativos com argumentos tipados.
@@ -54,6 +54,8 @@ await app.login({
 ```bash
 npm install @whanext/core
 ```
+
+Atualizando da v0.17 ou anterior? Veja [`MIGRATING_TO_ZAPO.md`](./MIGRATING_TO_ZAPO.md) antes de reutilizar a pasta de sessão.
 
 ## Início rápido
 
@@ -306,7 +308,7 @@ if (app.isReady) {
 
 Toda mensagem possui `message.sender: User`. Menções ficam em `message.mentionedUsers`, e o remetente de um reply em `message.quoted?.sender`.
 
-O provider Baileys também classifica o payload em `message.contentKind`, sem exigir acesso aos tipos internos do Baileys ou download da mídia:
+O provider oficial também classifica o payload em `message.contentKind`, sem exigir acesso aos tipos internos do Zapo ou download da mídia:
 
 ```ts
 app.on('message', async (message) => {
@@ -392,7 +394,7 @@ await app.message.buttons(chatId, {
 });
 ```
 
-Também funciona diretamente em replies de comandos, sem importar tipos do Baileys:
+Também funciona diretamente em replies de comandos, sem importar tipos do provider:
 
 ```ts
 await ctx.reply({
@@ -441,7 +443,7 @@ await writeFile(`./downloads/${downloaded.fileName ?? message.id}`, downloaded.d
 
 `download()` aceita a `Message` recebida, uma `QuotedMessage` ou uma `MessageKey` e devolve o buffer junto dos metadados normalizados. A mídia deve ser baixada enquanto a mensagem ainda está no cache da instância; o provider tenta renovar a URL de mídia automaticamente quando necessário.
 
-Para visualização única citada, o provider oficial preserva os metadados do envelope sem expor tipos do Baileys:
+Para visualização única citada, o provider oficial preserva os metadados do envelope sem expor tipos do Zapo:
 
 ```ts
 if (message.quoted?.isViewOnce && message.quoted.hasMedia) {
@@ -453,7 +455,7 @@ if (message.quoted?.isViewOnce && message.quoted.hasMedia) {
 }
 ```
 
-Isso também funciona quando a mídia de visualização única aparece dentro de envelopes `viewOnceMessageV2` ou `viewOnceMessageV2Extension`.
+Isso também funciona quando a mídia de visualização única aparece dentro de envelopes `viewOnceMessage` ou `viewOnceMessageV2`.
 
 Stickers aceitam `Uint8Array`, URL ou caminho local e devem estar em WebP, inclusive para animações. Texto, imagem e vídeo aceitam `User` diretamente em `mentions`.
 
@@ -864,7 +866,7 @@ const app = await create({
 
 O cache padrão vive na instância do app, usa LRU limitado e elimina entradas expiradas durante as leituras. Consultas simultâneas dos mesmos metadados são agrupadas em uma única chamada ao WhatsApp. Eventos e mutações de grupo invalidam automaticamente entradas relacionadas.
 
-Os mesmos metadados também alimentam internamente o `cachedGroupMetadata` do Baileys. Em grupos já aquecidos, isso remove a consulta de metadados do caminho de envio; mensagens continuam aguardando somente criptografia, upload quando houver mídia e confirmação da rede.
+O cache público de metadados continua independente do provider. Eventos e mutações de grupo invalidam as entradas relacionadas, evitando consultas repetidas do bot enquanto os dados ainda estão dentro do TTL.
 
 Para observar um `MemoryCache` criado diretamente:
 
@@ -879,7 +881,7 @@ cache.prune();
 
 `stats()` informa `size`, `maxEntries`, `hits`, `misses`, `sets`, `evictions` e `expirations`.
 
-Para uma única instância, o cache padrão é suficiente mesmo com muitos grupos, desde que `memoryMaxEntries` seja dimensionado. Em várias instâncias/processos, use um `CacheStore` distribuído para o cache público; cada conexão mantém ainda um L1 local limitado para o caminho criptográfico do Baileys. Não compartilhe uma mesma sessão ativa entre processos.
+Para uma única instância, o cache padrão é suficiente mesmo com muitos grupos, desde que `memoryMaxEntries` seja dimensionado. Em várias instâncias/processos, use um `CacheStore` distribuído para o cache público. Cada conexão Zapo mantém seu próprio store de sessão; não compartilhe a mesma sessão ativa entre processos.
 
 O cache interno de mensagens mantém até 1.000 mensagens por padrão para replies, reenvios do provider e downloads de mídia. Ajuste quando necessário:
 

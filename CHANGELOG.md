@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.18.0
+
+### Provider Zapo
+
+- O provider padrão foi migrado do Baileys para `zapo-js`, mantendo o contrato público `WhatsAppProvider`.
+- Autenticação e chaves Signal passam a usar store SQLite persistente em `<auth>/state.sqlite`.
+- Mensagens, replies, menções, mídia, view-once, reações, edição, revogação, pin, presença e grupos foram portados para as APIs do Zapo.
+- Eventos `message_protocol`, `group`, `connection` e `voip_call_*` são normalizados para os eventos públicos já existentes do WhaNext.
+- Chamadas continuam suportando rejeição pelo plugin oficial `@zapo-js/voip`.
+- Mensagens do backlog marcadas pelo Zapo como `offline` são ignoradas por padrão; `processOfflineMessages: true` restaura o processamento deliberado do backlog.
+- O cache recente passa a observar também `message_send`, permitindo reenvio de mensagens emitidas pela própria sessão.
+- O carregamento do plugin `@zapo-js/voip` passa a ser dinâmico, evitando que uma instalação sem binário `wrtc` funcional derrube recursos que não usam chamadas.
+- A tipagem de eventos VoIP deixa de perder a extensão de plugin do `WaClient`; `rejectCall` e `voip_call_*` passam por uma ponte tipada local.
+- `recording` é preservado no chatstate conforme a API documentada do Zapo, com adaptação local para a declaração de tipos publicada.
+- O mock do provider Zapo usa `vi.hoisted`, eliminando o acesso a `MockClient` antes da inicialização.
+
+### Migração
+
+- Adicionado `MIGRATING_TO_ZAPO.md` com orientação para novo pareamento ou conversão das sessões multifile antigas.
+- A versão do pacote passa para `0.18.0`.
+
 ## 0.17.1
 
 ### Fixed

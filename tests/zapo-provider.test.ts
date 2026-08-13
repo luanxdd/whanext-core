@@ -526,6 +526,53 @@ describe('ZapoProvider', () => {
     expect(current.message.downloadBytes).toHaveBeenCalledOnce();
   });
 
+  it('downloads ordinary quoted media from the raw quoted proto payload', async () => {
+    const { provider, client: current } = await connectedProvider();
+    const received: any[] = [];
+    provider.on('message', (message) => {
+      received.push(message);
+    });
+    const now = Math.floor(Date.now() / 1_000);
+
+    current.emit('message', {
+      key: {
+        id: 'converter-command',
+        remoteJid: '5511999999999@s.whatsapp.net',
+        fromMe: false,
+      },
+      message: {
+        extendedTextMessage: {
+          text: '&toimg',
+          contextInfo: {
+            stanzaId: 'quoted-sticker',
+            participant: '5511888888888@s.whatsapp.net',
+            quotedMessage: {
+              stickerMessage: {
+                mimetype: 'image/webp',
+                directPath: '/mock/sticker',
+                mediaKey: new Uint8Array([9, 8, 7]),
+              },
+            },
+          },
+        },
+      },
+      timestampSeconds: now,
+    });
+    await Promise.resolve();
+
+    const media = await provider.downloadMedia(received[0].quoted.key);
+
+    expect(media).toMatchObject({
+      kind: 'sticker',
+      mimetype: 'image/webp',
+    });
+    expect(current.message.downloadBytes).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stickerMessage: expect.any(Object),
+      }),
+    );
+  });
+
   it('caches and downloads quoted view-once media wrapped in viewOnceMessageV2Extension', async () => {
     const { provider, client: current } = await connectedProvider();
     const received: any[] = [];
@@ -575,10 +622,7 @@ describe('ZapoProvider', () => {
     expect([...media.data]).toEqual([1, 2, 3]);
     expect(current.message.downloadBytes).toHaveBeenCalledWith(
       expect.objectContaining({
-        key: expect.objectContaining({ id: 'quoted-view-once' }),
-        message: expect.objectContaining({
-          viewOnceMessageV2Extension: expect.any(Object),
-        }),
+        imageMessage: expect.objectContaining({ mimetype: 'image/jpeg' }),
       }),
     );
   });

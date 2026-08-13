@@ -45,6 +45,7 @@ import type {
 } from '@/provider/provider.js';
 import {
   extractQuotedZapoMessage,
+  unwrapZapoMessageContent,
   normalizeZapoKey,
   normalizeZapoMessage,
   type ZapoMessageKeyLike,
@@ -366,9 +367,9 @@ export class ZapoProvider implements WhatsAppProvider {
     }
 
     try {
-      const bytes = await this.#requireClient().message.downloadBytes(
-        message as WaIncomingMessageEvent,
-      );
+      const mediaMessage = unwrapZapoMessageContent(message.message)
+        ?? message.message;
+      const bytes = await this.#requireClient().message.downloadBytes(mediaMessage);
 
       return {
         data: Buffer.from(bytes),

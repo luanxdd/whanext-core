@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.19.2
+
+- Corrigido o download real de mídias citadas no provider Zapo: `downloadMedia()` agora entrega o `Proto.IMessage` bruto diretamente ao `downloadBytes()`, como suportado pela API do Zapo.
+- Envelopes `viewOnceMessage`, `viewOnceMessageV2` e `viewOnceMessageV2Extension` são desembrulhados antes do download, evitando falhas ao responder imagens/vídeos de visualização única.
+- A correção cobre replies comuns de imagem, vídeo, áudio e sticker, além de view-once.
+
+
 ## 0.19.1
 
 - Corrige menus de lista no provider Zapo usando `interactiveMessage` Native Flow com `single_select` em vez do `listMessage` legado.

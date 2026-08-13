@@ -372,20 +372,18 @@ describe('ZapoProvider', () => {
       1,
       '123@g.us',
       expect.objectContaining({
-        listMessage: expect.objectContaining({
-          title: 'Administração',
-          description: 'Escolha uma ação.',
-          buttonText: 'Ver opções',
-          listType: 1,
-          sections: [
-            expect.objectContaining({
-              title: 'Grupo',
-              rows: [
-                expect.objectContaining({ rowId: '&open', title: 'Abrir grupo' }),
-                expect.objectContaining({ rowId: '&close', title: 'Fechar grupo' }),
-              ],
-            }),
-          ],
+        interactiveMessage: expect.objectContaining({
+          header: expect.objectContaining({ title: 'Administração' }),
+          body: { text: 'Escolha uma ação.' },
+          footer: { text: 'WhaNext' },
+          nativeFlowMessage: expect.objectContaining({
+            buttons: [
+              expect.objectContaining({
+                name: 'single_select',
+                buttonParamsJson: expect.stringContaining('"title":"Ver opções"'),
+              }),
+            ],
+          }),
         }),
       }),
       {},
@@ -445,10 +443,23 @@ describe('ZapoProvider', () => {
       timestampSeconds: now,
     });
     current.emit('message', {
+      key: { id: 'native-list-response', remoteJid: '123@g.us', participant: '100@lid', fromMe: false },
+      message: {
+        interactiveResponseMessage: {
+          nativeFlowResponseMessage: {
+            name: 'single_select',
+            paramsJson: JSON.stringify({ id: '&close', title: 'Fechar grupo' }),
+          },
+        },
+      },
+      timestampSeconds: now,
+    });
+    current.emit('message', {
       key: { id: 'button-response', remoteJid: '123@g.us', participant: '100@lid', fromMe: false },
       message: {
         interactiveResponseMessage: {
           nativeFlowResponseMessage: {
+            name: 'quick_reply',
             paramsJson: JSON.stringify({ id: 'a', display_text: 'Abrir' }),
           },
         },
@@ -458,7 +469,8 @@ describe('ZapoProvider', () => {
     await Promise.resolve();
 
     expect(received[0]?.interactive).toEqual({ kind: 'list', id: '&open', title: 'Abrir grupo' });
-    expect(received[1]?.interactive).toEqual({ kind: 'button', id: 'a', title: 'Abrir' });
+    expect(received[1]?.interactive).toEqual({ kind: 'list', id: '&close', title: 'Fechar grupo' });
+    expect(received[2]?.interactive).toEqual({ kind: 'button', id: 'a', title: 'Abrir' });
   });
 
   it('normalizes incoming poll questions as text', async () => {

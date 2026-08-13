@@ -943,21 +943,38 @@ export class ZapoProvider implements WhatsAppProvider {
     this.#validateList(content);
     const mentions = content.mentions ? this.#mentions(content.mentions) : [];
     const raw: Proto.IMessage = {
-      listMessage: {
-        ...(content.title !== undefined ? { title: content.title } : {}),
-        description: content.text,
-        buttonText: content.buttonText,
-        ...(content.footer !== undefined ? { footerText: content.footer } : {}),
-        listType: proto.Message.ListMessage.ListType.SINGLE_SELECT,
-        sections: content.list.map((section) => ({
-          ...(section.title !== undefined ? { title: section.title } : {}),
-          rows: section.rows.map((row) => ({
-            rowId: row.id,
-            title: row.title,
-            ...(row.description !== undefined ? { description: row.description } : {}),
-          })),
-        })),
+      interactiveMessage: {
+        ...(content.title !== undefined
+          ? {
+              header: {
+                title: content.title,
+                hasMediaAttachment: false,
+              },
+            }
+          : {}),
+        body: { text: content.text },
+        ...(content.footer !== undefined ? { footer: { text: content.footer } } : {}),
         ...(mentions.length > 0 ? { contextInfo: { mentionedJid: mentions } } : {}),
+        nativeFlowMessage: {
+          buttons: [
+            {
+              name: 'single_select',
+              buttonParamsJson: JSON.stringify({
+                title: content.buttonText,
+                sections: content.list.map((section) => ({
+                  ...(section.title !== undefined ? { title: section.title } : {}),
+                  rows: section.rows.map((row) => ({
+                    id: row.id,
+                    title: row.title,
+                    ...(row.description !== undefined ? { description: row.description } : {}),
+                  })),
+                })),
+              }),
+            },
+          ],
+          messageParamsJson: '{}',
+          messageVersion: 1,
+        },
       },
     };
     const result = await this.#requireClient().message.send(chatId, raw, {

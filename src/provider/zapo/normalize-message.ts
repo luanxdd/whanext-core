@@ -330,14 +330,28 @@ function getInteractiveResponse(content: Proto.IMessage): InteractiveResponse | 
   const nativeId = stringField(native, ['id', 'selected_id', 'row_id', 'button_id']);
   if (nativeId) {
     const title = stringField(native, ['display_text', 'title']);
+    const nativeName = nativeFlowName(content);
     return {
-      kind: native && ('row_id' in native || 'selected_id' in native) ? 'list' : 'button',
+      kind: nativeName === 'single_select'
+        || (native && ('row_id' in native || 'selected_id' in native))
+        ? 'list'
+        : 'button',
       id: nativeId,
       ...(title ? { title } : {}),
     };
   }
 
   return undefined;
+}
+
+
+function nativeFlowName(content: Proto.IMessage): string | undefined {
+  const response = content.interactiveResponseMessage as {
+    nativeFlowResponseMessage?: {
+      name?: string | null;
+    } | null;
+  } | null | undefined;
+  return response?.nativeFlowResponseMessage?.name ?? undefined;
 }
 
 function getNativeFlowDisplayText(content: Proto.IMessage): string | undefined {
@@ -347,6 +361,7 @@ function getNativeFlowDisplayText(content: Proto.IMessage): string | undefined {
 function nativeFlowParams(content: Proto.IMessage): Record<string, unknown> | undefined {
   const response = content.interactiveResponseMessage as {
     nativeFlowResponseMessage?: {
+      name?: string | null;
       paramsJson?: string | null;
     } | null;
   } | null | undefined;

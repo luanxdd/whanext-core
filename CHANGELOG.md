@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.19.1
+
+- Corrige menus de lista no provider Zapo usando `interactiveMessage` Native Flow com `single_select` em vez do `listMessage` legado.
+- Respostas de `single_select` agora são normalizadas explicitamente como `message.interactive.kind = "list"`.
+
+
 ## 0.19.0
 
 ### Comandos

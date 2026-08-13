@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.18.1
+
+### Fixed
+
+- Corrige a geração de código de pareamento no Zapo quando o servidor disponibiliza primeiro o fluxo QR (`auth_qr`) em vez de emitir `auth_pairing_required`.
+- O provider agora considera tanto `auth_pairing_required` quanto `auth_qr` como sinais válidos de que `client.auth.requestPairingCode()` pode ser chamado.
+
 ## 0.18.0
 
 ### Provider Zapo

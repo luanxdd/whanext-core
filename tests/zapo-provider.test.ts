@@ -15,6 +15,7 @@ const { mocks, MockClient } = vi.hoisted(() => {
     clients: [] as any[],
     storeOptions: [] as unknown[],
     sqliteOptions: [] as unknown[],
+    nextAuthEvent: 'pairing' as 'pairing' | 'qr',
   };
 
   class MockClient {
@@ -86,7 +87,11 @@ const { mocks, MockClient } = vi.hoisted(() => {
     }
 
     connect = vi.fn(async () => {
-      this.emit('auth_pairing_required', { forceManual: true });
+      if (mocks.nextAuthEvent === 'qr') {
+        this.emit('auth_qr', { qr: 'mock-qr', ttlMs: 60_000 });
+      } else {
+        this.emit('auth_pairing_required', { forceManual: true });
+      }
       await new Promise<void>(() => undefined);
     });
 
@@ -159,6 +164,7 @@ beforeEach(() => {
   mocks.clients.length = 0;
   mocks.storeOptions.length = 0;
   mocks.sqliteOptions.length = 0;
+  mocks.nextAuthEvent = 'pairing';
   vi.clearAllMocks();
 });
 
@@ -208,6 +214,17 @@ describe('ZapoProvider', () => {
   });
 
   it('requests a pairing code only after the pairing challenge', async () => {
+    const provider = new ZapoProvider({ auth: './session', browser: Browser.Windows });
+
+    await provider.connect();
+    const code = await provider.requestPairingCode('+55 (31) 99999-9999');
+
+    expect(code).toBe('12345678');
+    expect(client().auth.requestPairingCode).toHaveBeenCalledWith('5531999999999');
+  });
+
+  it('requests a pairing code when the QR flow becomes ready first', async () => {
+    mocks.nextAuthEvent = 'qr';
     const provider = new ZapoProvider({ auth: './session', browser: Browser.Windows });
 
     await provider.connect();

@@ -585,9 +585,11 @@ export class ZapoProvider implements WhatsAppProvider {
 
   #bind(client: WaClient): void {
     client.on('auth_pairing_required', () => {
-      this.#pairingRequired = true;
-      this.#resolvePairingReady?.();
-      this.#resolvePairingReady = undefined;
+      this.#markPairingReady();
+    });
+
+    client.on('auth_qr', () => {
+      this.#markPairingReady();
     });
 
     client.on('auth_paired', () => {
@@ -1122,6 +1124,12 @@ export class ZapoProvider implements WhatsAppProvider {
     if (timestamp === undefined) return false;
 
     return timestamp < this.#connectedAtSeconds - 3;
+  }
+
+  #markPairingReady(): void {
+    this.#pairingRequired = true;
+    this.#resolvePairingReady?.();
+    this.#resolvePairingReady = undefined;
   }
 
   #preparePairingGate(): void {

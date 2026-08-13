@@ -123,6 +123,11 @@ vi.mock('zapo-js', () => ({
           MESSAGE_EDIT: 14,
         },
       },
+      ListMessage: {
+        ListType: {
+          SINGLE_SELECT: 1,
+        },
+      },
     },
   },
 }));
@@ -305,13 +310,14 @@ describe('ZapoProvider', () => {
     });
   });
 
-  it('sends Native Flow copy and link buttons without exposing Zapo proto', async () => {
+  it('sends Native Flow copy, link and quick-reply buttons without exposing Zapo proto', async () => {
     const { provider, client: current } = await connectedProvider();
 
     await provider.sendMessage('5511999999999@s.whatsapp.net', {
       buttons: [
         { type: 'copy', label: 'Copiar', code: 'ABCD-1234' },
         { type: 'link', label: 'Abrir', url: 'https://example.com' },
+        { type: 'reply', label: 'Executar', id: '&open' },
       ],
       title: 'Acesso',
       text: 'Escolha:',
@@ -328,12 +334,154 @@ describe('ZapoProvider', () => {
             buttons: [
               expect.objectContaining({ name: 'cta_copy' }),
               expect.objectContaining({ name: 'cta_url' }),
+              expect.objectContaining({ name: 'quick_reply' }),
             ],
           }),
         }),
       }),
       {},
     );
+  });
+
+  it('sends list menus and typed polls through Zapo', async () => {
+    const { provider, client: current } = await connectedProvider();
+
+    await provider.sendMessage('123@g.us', {
+      title: 'Administração',
+      text: 'Escolha uma ação.',
+      buttonText: 'Ver opções',
+      footer: 'WhaNext',
+      list: [
+        {
+          title: 'Grupo',
+          rows: [
+            { id: '&open', title: 'Abrir grupo' },
+            { id: '&close', title: 'Fechar grupo', description: 'Somente admins' },
+          ],
+        },
+      ],
+    });
+    await provider.sendMessage('123@g.us', {
+      poll: 'Verdade ou desafio?',
+      options: ['Verdade', 'Desafio'],
+      selectableCount: 1,
+      allowAddOption: false,
+    });
+
+    expect(current.message.send).toHaveBeenNthCalledWith(
+      1,
+      '123@g.us',
+      expect.objectContaining({
+        listMessage: expect.objectContaining({
+          title: 'Administração',
+          description: 'Escolha uma ação.',
+          buttonText: 'Ver opções',
+          listType: 1,
+          sections: [
+            expect.objectContaining({
+              title: 'Grupo',
+              rows: [
+                expect.objectContaining({ rowId: '&open', title: 'Abrir grupo' }),
+                expect.objectContaining({ rowId: '&close', title: 'Fechar grupo' }),
+              ],
+            }),
+          ],
+        }),
+      }),
+      {},
+    );
+    expect(current.message.send).toHaveBeenNthCalledWith(
+      2,
+      '123@g.us',
+      {
+        type: 'poll',
+        name: 'Verdade ou desafio?',
+        options: ['Verdade', 'Desafio'],
+        selectableCount: 1,
+        allowAddOption: false,
+      },
+      {},
+    );
+  });
+
+  it('rejects invalid interactive payloads before sending them', async () => {
+    const { provider } = await connectedProvider();
+
+    await expect(provider.sendMessage('123@g.us', {
+      text: 'Ações',
+      buttons: [{ type: 'reply', label: 'Abrir', id: '' }],
+    })).rejects.toMatchObject({ code: 'ARGUMENT_INVALID' });
+
+    await expect(provider.sendMessage('123@g.us', {
+      text: 'Menu',
+      buttonText: 'Abrir',
+      list: [{ rows: [
+        { id: 'same', title: 'A' },
+        { id: 'same', title: 'B' },
+      ] }],
+    })).rejects.toMatchObject({ code: 'ARGUMENT_INVALID' });
+
+    await expect(provider.sendMessage('123@g.us', {
+      poll: 'Escolha',
+      options: ['A', 'B'],
+      selectableCount: 3,
+    })).rejects.toMatchObject({ code: 'ARGUMENT_INVALID' });
+  });
+
+  it('normalizes list and native-flow response ids for command routing', async () => {
+    const { provider, client: current } = await connectedProvider();
+    const received: any[] = [];
+    provider.on('message', (message) => { received.push(message); });
+    const now = Math.floor(Date.now() / 1_000);
+
+    current.emit('message', {
+      key: { id: 'list-response', remoteJid: '123@g.us', participant: '100@lid', fromMe: false },
+      message: {
+        listResponseMessage: {
+          title: 'Abrir grupo',
+          singleSelectReply: { selectedRowId: '&open' },
+        },
+      },
+      timestampSeconds: now,
+    });
+    current.emit('message', {
+      key: { id: 'button-response', remoteJid: '123@g.us', participant: '100@lid', fromMe: false },
+      message: {
+        interactiveResponseMessage: {
+          nativeFlowResponseMessage: {
+            paramsJson: JSON.stringify({ id: 'a', display_text: 'Abrir' }),
+          },
+        },
+      },
+      timestampSeconds: now,
+    });
+    await Promise.resolve();
+
+    expect(received[0]?.interactive).toEqual({ kind: 'list', id: '&open', title: 'Abrir grupo' });
+    expect(received[1]?.interactive).toEqual({ kind: 'button', id: 'a', title: 'Abrir' });
+  });
+
+  it('normalizes incoming poll questions as text', async () => {
+    const { provider, client: current } = await connectedProvider();
+    const received: any[] = [];
+    provider.on('message', (message) => { received.push(message); });
+    const now = Math.floor(Date.now() / 1_000);
+
+    current.emit('message', {
+      key: { id: 'poll-1', remoteJid: '123@g.us', participant: '100@lid', fromMe: false },
+      message: {
+        pollCreationMessageV3: {
+          name: 'Qual opção?',
+          options: [{ optionName: 'A' }, { optionName: 'B' }],
+          selectableOptionsCount: 1,
+        },
+      },
+      timestampSeconds: now,
+    });
+    await Promise.resolve();
+
+    expect(received[0]?.contentKind).toBe('poll');
+    expect(received[0]?.text).toBe('Qual opção?');
   });
 
   it('downloads cached incoming media', async () => {
@@ -364,6 +512,63 @@ describe('ZapoProvider', () => {
     expect(media.mimetype).toBe('image/jpeg');
     expect([...media.data]).toEqual([1, 2, 3]);
     expect(current.message.downloadBytes).toHaveBeenCalledOnce();
+  });
+
+  it('caches and downloads quoted view-once media wrapped in viewOnceMessageV2Extension', async () => {
+    const { provider, client: current } = await connectedProvider();
+    const received: any[] = [];
+    provider.on('message', (message) => {
+      received.push(message);
+    });
+    const now = Math.floor(Date.now() / 1_000);
+
+    current.emit('message', {
+      key: {
+        id: 'fig-command',
+        remoteJid: '5511999999999@s.whatsapp.net',
+        fromMe: false,
+      },
+      message: {
+        extendedTextMessage: {
+          text: '&fig',
+          contextInfo: {
+            stanzaId: 'quoted-view-once',
+            participant: '5511888888888@s.whatsapp.net',
+            quotedMessage: {
+              viewOnceMessageV2Extension: {
+                message: {
+                  imageMessage: { mimetype: 'image/jpeg' },
+                },
+              },
+            },
+          },
+        },
+      },
+      timestampSeconds: now,
+    });
+    await Promise.resolve();
+
+    expect(received[0]?.quoted).toMatchObject({
+      hasMedia: true,
+      isViewOnce: true,
+      contentKind: 'image',
+    });
+
+    const media = await provider.downloadMedia(received[0].quoted.key);
+
+    expect(media).toMatchObject({
+      kind: 'image',
+      mimetype: 'image/jpeg',
+    });
+    expect([...media.data]).toEqual([1, 2, 3]);
+    expect(current.message.downloadBytes).toHaveBeenCalledWith(
+      expect.objectContaining({
+        key: expect.objectContaining({ id: 'quoted-view-once' }),
+        message: expect.objectContaining({
+          viewOnceMessageV2Extension: expect.any(Object),
+        }),
+      }),
+    );
   });
 
   it('ignores messages queued before the current connection by default', async () => {

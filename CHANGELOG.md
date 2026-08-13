@@ -1,5 +1,43 @@
 # Changelog
 
+## 0.19.0
+
+### Comandos
+
+- `prefix` passa a aceitar um prefixo único ou uma lista, como `['&', '!', '.']`; o primeiro continua sendo o prefixo principal usado por menus/help.
+- Novo `prefixless` por comando para liberar somente gatilhos explicitamente escolhidos sem prefixo, como `prefixless: ['a']`.
+- `ctx.prefix` agora representa o prefixo que realmente acionou a execução e fica vazio (`''`) em execuções prefixless.
+- `ctx.commands.prefixes` expõe todos os prefixos configurados.
+- Novo `app.commands.setPrefixes()` permite ativar, trocar ou desativar o modo multi-prefixo em runtime sem recriar a aplicação.
+- IDs de respostas de botões/listas são encaminhados ao mesmo router de comandos, permitindo rows como `&open` ou aliases prefixless como `a`.
+
+### Interativos
+
+- Novo envio de enquetes com `PollContent` e `app.message.poll()`.
+- Novo menu de lista single-select com `ListContent`, seções/rows e `app.message.list()`.
+- Botões Native Flow ganham o tipo `reply`, com ID de resposta, além de `copy` e `link`.
+- Mensagens recebidas passam a expor `message.interactive` com `kind`, `id` e título visível quando disponível.
+- Polls recebidas preservam a pergunta em `message.text` e continuam classificadas como `contentKind: 'poll'`.
+
+### Correções
+
+- Corrigida a extração do `contextInfo.quotedMessage`: `extractQuotedZapoMessage()` agora usa o nó real retornado por `contentNode()` em vez do wrapper `{ type, node }`.
+- Quoted messages são armazenadas como mensagens completas no mesmo cache recente do provider, preservando download de mídia e repost.
+- `downloadMedia()` também mantém associação direta com as `MessageKey` emitidas no evento, com fallback por chave/ID para objetos reconstruídos.
+- A correção cobre especialmente respostas a mídias `viewOnceMessageV2Extension`, como `&fig` sobre uma imagem/vídeo de visualização única.
+
+### Compatibilidade
+
+- Configurações existentes com `prefix: '&'` continuam funcionando sem alteração.
+- Nenhum comando se torna prefixless automaticamente; o recurso é opt-in por definição.
+- A API anterior de botões `copy`/`link` permanece compatível.
+
+## 0.18.2
+
+- Corrigida a normalização de mídias de visualização única recebidas no envelope `viewOnceMessageV2Extension` do protocolo do WhatsApp.
+- Replies para imagens e vídeos de visualização única agora expõem corretamente `quoted.hasMedia`, `quoted.isViewOnce`, `quoted.contentKind` e `quoted.media`.
+- O cache de quoted media preserva esse envelope para que `MediaService.download()` consiga recuperar a mídia ao responder comandos como `&fig`.
+
 ## 0.18.1
 
 ### Fixed

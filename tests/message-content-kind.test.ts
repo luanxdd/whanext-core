@@ -4,7 +4,10 @@ import {
   expect,
   it,
 } from 'vitest';
-import { normalizeZapoMessage } from '@/provider/zapo/normalize-message.js';
+import {
+  extractQuotedZapoMessage,
+  normalizeZapoMessage,
+} from '@/provider/zapo/normalize-message.js';
 
 function createMessage(message: Record<string, unknown>): WaIncomingMessageEvent {
   return {
@@ -163,6 +166,73 @@ describe('Zapo message content classification', () => {
       },
       key: {
         id: 'view-once-id',
+        chatId: '5511999999999@s.whatsapp.net',
+        participantId: '5511888888888@s.whatsapp.net',
+      },
+    });
+  });
+
+  it('extracts raw quoted messages for media caching', () => {
+    const raw = createMessage({
+      extendedTextMessage: {
+        text: '&fig',
+        contextInfo: {
+          stanzaId: 'quoted-cache-id',
+          participant: '5511888888888@s.whatsapp.net',
+          quotedMessage: {
+            viewOnceMessageV2Extension: {
+              message: {
+                imageMessage: { mimetype: 'image/jpeg' },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(extractQuotedZapoMessage(raw)).toMatchObject({
+      key: {
+        id: 'quoted-cache-id',
+        remoteJid: '5511999999999@s.whatsapp.net',
+        participant: '5511888888888@s.whatsapp.net',
+      },
+      message: {
+        viewOnceMessageV2Extension: expect.any(Object),
+      },
+    });
+  });
+
+  it('supports viewOnceMessageV2Extension on quoted media', () => {
+    const message = normalizeZapoMessage(createMessage({
+      extendedTextMessage: {
+        text: '&fig',
+        contextInfo: {
+          stanzaId: 'view-once-extension-id',
+          participant: '5511888888888@s.whatsapp.net',
+          quotedMessage: {
+            viewOnceMessageV2Extension: {
+              message: {
+                imageMessage: {
+                  mimetype: 'image/jpeg',
+                },
+              },
+            },
+          },
+        },
+      },
+    }));
+
+    expect(message?.quoted).toMatchObject({
+      hasMedia: true,
+      isViewOnce: true,
+      contentKind: 'image',
+      media: {
+        kind: 'image',
+        mimetype: 'image/jpeg',
+        viewOnce: true,
+      },
+      key: {
+        id: 'view-once-extension-id',
         chatId: '5511999999999@s.whatsapp.net',
         participantId: '5511888888888@s.whatsapp.net',
       },

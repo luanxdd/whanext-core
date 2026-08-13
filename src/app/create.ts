@@ -21,7 +21,7 @@ export interface CreateOptions {
   phone?: string;
   browser?: Browser;
   auth?: string;
-  prefix?: string;
+  prefix?: string | readonly string[];
   cache?: CacheOptions;
   logger?: LoggerConfig;
   mute?: MuteOptions;

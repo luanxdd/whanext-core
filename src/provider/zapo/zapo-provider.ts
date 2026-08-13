@@ -26,10 +26,12 @@ import { uniqueIdentities } from '@/models/identity.js';
 import type {
   ButtonsContent,
   DownloadedMedia,
+  ListContent,
   MediaSource,
   MentionTarget,
   MessageContent,
   MessageKey,
+  PollContent,
   RepostMessageOptions,
   SentMessage,
 } from '@/models/message.js';
@@ -164,6 +166,7 @@ export class ZapoProvider implements WhatsAppProvider {
   readonly #events = new TypedEventEmitter<ProviderEvents>();
   readonly #logger: Logger;
   readonly #messageStore = new Map<string, StoredZapoMessage>();
+  readonly #messageKeyStore = new WeakMap<MessageKey, StoredZapoMessage>();
   readonly #messageCacheSize: number;
   #client: WaClient | undefined;
   #voip: ZapoVoipCoordinatorLike | undefined;
@@ -284,6 +287,10 @@ export class ZapoProvider implements WhatsAppProvider {
       return this.#sendButtons(chatId, content, replyTo);
     }
 
+    if ('list' in content) {
+      return this.#sendList(chatId, content, replyTo);
+    }
+
     const client = this.#requireClient();
     const { value, mentions, viewOnce } = await this.#toContent(content);
     const result = await client.message.send(chatId, value as never, {
@@ -338,7 +345,8 @@ export class ZapoProvider implements WhatsAppProvider {
   }
 
   async downloadMedia(key: MessageKey): Promise<DownloadedMedia> {
-    const message = this.#findStoredMessage(this.#toZapoKey(key));
+    const message = this.#messageKeyStore.get(key)
+      ?? this.#findStoredMessage(this.#toZapoKey(key));
 
     if (!message?.message) {
       throw new WhaNextError(
@@ -666,13 +674,22 @@ export class ZapoProvider implements WhatsAppProvider {
     if (stored.key?.id && stored.message) this.#remember(stored);
 
     const quoted = extractQuotedZapoMessage(event);
-    if (quoted) {
-      const quotedStored = quoted as unknown as StoredZapoMessage;
-      if (quotedStored.key?.id && quotedStored.message) this.#remember(quotedStored);
+    if (quoted?.key.id && quoted.message) {
+      this.#remember(quoted as unknown as StoredZapoMessage);
     }
 
     const message = normalizeZapoMessage(event);
-    if (message) void this.#events.emit('message', message);
+    if (!message) return;
+
+    this.#messageKeyStore.set(message.keys, stored);
+    if (message.quoted && quoted?.message) {
+      this.#messageKeyStore.set(
+        message.quoted.key,
+        quoted as unknown as StoredZapoMessage,
+      );
+    }
+
+    void this.#events.emit('message', message);
   }
 
   #handleProtocolEvent(event: ZapoProtocolEventLike): void {
@@ -859,6 +876,7 @@ export class ZapoProvider implements WhatsAppProvider {
     content: ButtonsContent,
     replyTo?: MessageKey,
   ): Promise<SentMessage> {
+    this.#validateButtons(content);
     const mentions = content.mentions ? this.#mentions(content.mentions) : [];
     const raw: Proto.IMessage = {
       interactiveMessage: {
@@ -874,25 +892,72 @@ export class ZapoProvider implements WhatsAppProvider {
         ...(content.footer !== undefined ? { footer: { text: content.footer } } : {}),
         ...(mentions.length > 0 ? { contextInfo: { mentionedJid: mentions } } : {}),
         nativeFlowMessage: {
-          buttons: content.buttons.map((button) => button.type === 'copy'
-            ? {
+          buttons: content.buttons.map((button) => {
+            if (button.type === 'copy') {
+              return {
                 name: 'cta_copy',
                 buttonParamsJson: JSON.stringify({
                   display_text: button.label,
                   copy_code: button.code,
                 }),
-              }
-            : {
-                name: 'cta_url',
+              };
+            }
+
+            if (button.type === 'reply') {
+              return {
+                name: 'quick_reply',
                 buttonParamsJson: JSON.stringify({
                   display_text: button.label,
-                  url: button.url,
-                  merchant_url: button.url,
+                  id: button.id,
                 }),
+              };
+            }
+
+            return {
+              name: 'cta_url',
+              buttonParamsJson: JSON.stringify({
+                display_text: button.label,
+                url: button.url,
+                merchant_url: button.url,
               }),
+            };
+          }),
           messageParamsJson: '{}',
           messageVersion: 1,
         },
+      },
+    };
+    const result = await this.#requireClient().message.send(chatId, raw, {
+      ...(replyTo ? { quote: this.#toZapoKey(replyTo) } : {}),
+      ...(mentions.length > 0 ? { mentions } : {}),
+    });
+
+    return this.#sent(result, chatId);
+  }
+
+  async #sendList(
+    chatId: string,
+    content: ListContent,
+    replyTo?: MessageKey,
+  ): Promise<SentMessage> {
+    this.#validateList(content);
+    const mentions = content.mentions ? this.#mentions(content.mentions) : [];
+    const raw: Proto.IMessage = {
+      listMessage: {
+        ...(content.title !== undefined ? { title: content.title } : {}),
+        description: content.text,
+        buttonText: content.buttonText,
+        ...(content.footer !== undefined ? { footerText: content.footer } : {}),
+        listType: proto.Message.ListMessage.ListType.SINGLE_SELECT,
+        sections: content.list.map((section) => ({
+          ...(section.title !== undefined ? { title: section.title } : {}),
+          rows: section.rows.map((row) => ({
+            rowId: row.id,
+            title: row.title,
+            ...(row.description !== undefined ? { description: row.description } : {}),
+          })),
+        })),
+        ...(mentions.length > 0 ? { contextInfo: { mentionedJid: mentions } } : {}),
       },
     };
     const result = await this.#requireClient().message.send(chatId, raw, {
@@ -912,6 +977,13 @@ export class ZapoProvider implements WhatsAppProvider {
       return {
         value: { type: 'text', text: content.text },
         mentions: content.mentions ? this.#mentions(content.mentions) : [],
+      };
+    }
+
+    if ('poll' in content) {
+      return {
+        value: this.#pollContent(content),
+        mentions: [],
       };
     }
 
@@ -959,6 +1031,94 @@ export class ZapoProvider implements WhatsAppProvider {
         ...(content.voice !== undefined ? { ptt: content.voice } : {}),
       },
       mentions: [],
+    };
+  }
+
+  #validateButtons(content: ButtonsContent): void {
+    if (!content.text.trim() || content.buttons.length === 0) {
+      throw new WhaNextError(
+        'ARGUMENT_INVALID',
+        'Interactive buttons require body text and at least one button.',
+      );
+    }
+
+    for (const button of content.buttons) {
+      if (!button.label.trim()) {
+        throw new WhaNextError('ARGUMENT_INVALID', 'Interactive button labels cannot be empty.');
+      }
+      if (button.type === 'reply' && !button.id.trim()) {
+        throw new WhaNextError('ARGUMENT_INVALID', 'Reply button IDs cannot be empty.');
+      }
+      if (button.type === 'copy' && !button.code) {
+        throw new WhaNextError('ARGUMENT_INVALID', 'Copy buttons require a non-empty code.');
+      }
+      if (button.type === 'link' && !button.url.trim()) {
+        throw new WhaNextError('ARGUMENT_INVALID', 'Link buttons require a non-empty URL.');
+      }
+    }
+  }
+
+  #validateList(content: ListContent): void {
+    if (!content.text.trim() || !content.buttonText.trim() || content.list.length === 0) {
+      throw new WhaNextError(
+        'ARGUMENT_INVALID',
+        'List menus require body text, button text and at least one section.',
+      );
+    }
+
+    let rowCount = 0;
+    const ids = new Set<string>();
+    for (const section of content.list) {
+      for (const row of section.rows) {
+        rowCount += 1;
+        const id = row.id.trim();
+        if (!id || !row.title.trim()) {
+          throw new WhaNextError(
+            'ARGUMENT_INVALID',
+            'Every list row requires a non-empty id and title.',
+          );
+        }
+        if (ids.has(id)) {
+          throw new WhaNextError(
+            'ARGUMENT_INVALID',
+            `Duplicate list row id "${id}".`,
+          );
+        }
+        ids.add(id);
+      }
+    }
+
+    if (rowCount === 0) {
+      throw new WhaNextError('ARGUMENT_INVALID', 'List menus require at least one row.');
+    }
+  }
+
+  #pollContent(content: PollContent): unknown {
+    const name = content.poll.trim();
+    const options = content.options.map((option) => option.trim()).filter(Boolean);
+    const selectableCount = content.selectableCount ?? 1;
+
+    if (!name || options.length < 2) {
+      throw new WhaNextError(
+        'ARGUMENT_INVALID',
+        'Polls require a question and at least two non-empty options.',
+      );
+    }
+
+    if (!Number.isInteger(selectableCount) || selectableCount < 1 || selectableCount > options.length) {
+      throw new WhaNextError(
+        'ARGUMENT_INVALID',
+        'selectableCount must be an integer between 1 and the number of poll options.',
+        { context: { selectableCount, options: options.length } },
+      );
+    }
+
+    return {
+      type: 'poll',
+      name,
+      options,
+      selectableCount,
+      ...(content.allowAddOption !== undefined ? { allowAddOption: content.allowAddOption } : {}),
     };
   }
 
@@ -1094,13 +1254,26 @@ export class ZapoProvider implements WhatsAppProvider {
     if (!key.id) return undefined;
 
     for (const message of this.#messageStore.values()) {
-      if (message.key.id === key.id) return message;
+      if (message.key.id === key.id && message.message) return message;
+    }
+
+    for (const message of this.#messageStore.values()) {
+      const embeddedQuoted = extractQuotedZapoMessage(message as WaIncomingMessageEvent);
+      if (!embeddedQuoted?.key.id || embeddedQuoted.key.id !== key.id || !embeddedQuoted.message) {
+        continue;
+      }
+
+      const storedQuoted = embeddedQuoted as unknown as StoredZapoMessage;
+      this.#remember(storedQuoted);
+      return storedQuoted;
     }
 
     return undefined;
   }
 
   #remember(message: StoredZapoMessage): void {
+    if (!message.key.id || !message.message) return;
+
     const key = this.#messageStoreKey(message.key);
     this.#messageStore.delete(key);
     this.#messageStore.set(key, message);

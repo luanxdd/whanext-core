@@ -29,7 +29,7 @@ import type { GroupService } from '@/services/group-service.js';
 import { UserService } from '@/services/user-service.js';
 
 export interface RouterOptions {
-  prefix?: string;
+  prefix?: string | readonly string[];
   onError?: (error: WhaNextError, message: Message) => void | Promise<void>;
   onCommandError?: CommandErrorHandler;
   beforeExecute?: (context: CommandContext) => void | Promise<void>;
@@ -64,8 +64,11 @@ interface RegisteredRoot {
 
 export class CommandRouter {
   readonly #roots = new Map<string, RegisteredRoot>();
+  readonly #prefixlessRoots = new Map<string, RegisteredRoot>();
   readonly #definitions = new Set<CommandDefinition>();
-  readonly #prefix: string;
+  #prefix = '!';
+  #prefixes: readonly string[] = ['!'];
+  #matchingPrefixes: readonly string[] = ['!'];
   readonly #services: CommandRuntimeServices;
   readonly #legacyOnError?: RouterOptions['onError'];
   readonly #globalMiddleware: CommandMiddleware[] = [];
@@ -85,23 +88,27 @@ export class CommandRouter {
     this.#services = isRuntimeServices(servicesOrGroup)
       ? servicesOrGroup
       : createLegacyServices(servicesOrGroup);
-    this.#prefix = options.prefix ?? '!';
+    this.setPrefixes(options.prefix ?? '!');
     this.#legacyOnError = options.onError;
     this.#beforeExecute = options.beforeExecute;
     this.#afterExecute = options.afterExecute;
     if (options.onCommandError) this.#errorHandlers.push(options.onCommandError);
-
-    if (this.#prefix.length === 0 || /\s/.test(this.#prefix)) {
-      throw new WhaNextError(
-        'ARGUMENT_INVALID',
-        'The command prefix cannot be empty or contain whitespace.',
-        { context: { prefix: this.#prefix } },
-      );
-    }
   }
 
   get prefix(): string {
     return this.#prefix;
+  }
+
+  get prefixes(): readonly string[] {
+    return this.#prefixes;
+  }
+
+  setPrefixes(prefixes: string | readonly string[]): this {
+    const normalized = normalizePrefixes(prefixes);
+    this.#prefixes = normalized;
+    this.#matchingPrefixes = [...normalized].sort((left, right) => right.length - left.length);
+    this.#prefix = normalized[0]!;
+    return this;
   }
 
   get size(): number {
@@ -122,6 +129,22 @@ export class CommandRouter {
       }
 
       this.#roots.set(normalized, {
+        definition,
+        ...(name.locale ? { locale: name.locale } : {}),
+      });
+    }
+
+    for (const name of prefixlessCommandNames(definition)) {
+      const normalized = name.value.toLowerCase();
+
+      if (this.#prefixlessRoots.has(normalized)) {
+        throw new WhaNextError(
+          'ARGUMENT_INVALID',
+          `The prefixless command trigger "${normalized}" is already registered.`,
+        );
+      }
+
+      this.#prefixlessRoots.set(normalized, {
         definition,
         ...(name.locale ? { locale: name.locale } : {}),
       });
@@ -200,15 +223,19 @@ export class CommandRouter {
   }
 
   async dispatch(message: Message): Promise<boolean> {
-    const text = message.text?.trim();
-    if (!text?.startsWith(this.#prefix)) return false;
+    const text = (message.interactive?.id ?? message.text)?.trim();
+    if (!text) return false;
 
-    const tokens = tokenize(text.slice(this.#prefix.length));
+    const matchedPrefix = this.#matchPrefix(text);
+    const tokens = tokenize(matchedPrefix === undefined ? text : text.slice(matchedPrefix.length));
     const rootName = tokens.shift()?.toLowerCase();
     if (!rootName) return false;
 
-    const root = this.#roots.get(rootName);
+    const root = matchedPrefix === undefined
+      ? this.#prefixlessRoots.get(rootName)
+      : this.#roots.get(rootName);
     if (!root) return false;
+    const invocationPrefix = matchedPrefix ?? '';
 
     let resolved: ResolvedCommand;
 
@@ -233,6 +260,7 @@ export class CommandRouter {
         args: new ArgsParser(tokens),
         services: this.#services,
         commands: this,
+        prefix: invocationPrefix,
         signal: new AbortController().signal,
         ...(root.locale ? { locale: root.locale } : {}),
       });
@@ -281,6 +309,7 @@ export class CommandRouter {
             args: legacyArgs,
             services: this.#services,
             commands: this,
+            prefix: invocationPrefix,
             signal,
             ...(resolved.locale ? { locale: resolved.locale } : {}),
           });
@@ -303,6 +332,7 @@ export class CommandRouter {
         args: legacyArgs,
         services: this.#services,
         commands: this,
+        prefix: invocationPrefix,
         signal: new AbortController().signal,
         ...(resolved.locale ? { locale: resolved.locale } : {}),
       });
@@ -310,6 +340,10 @@ export class CommandRouter {
       if (await this.#handleError(resolved, context, normalized)) return true;
       throw normalized;
     }
+  }
+
+  #matchPrefix(text: string): string | undefined {
+    return this.#matchingPrefixes.find((prefix) => text.startsWith(prefix));
   }
 
   #resolve(root: RegisteredRoot, inputTokens: readonly string[]): ResolvedCommand {
@@ -478,6 +512,28 @@ export class CommandRouter {
       }
     }
 
+    if (definition.prefixless && parents.length > 0) {
+      throw new WhaNextError(
+        'ARGUMENT_INVALID',
+        'Prefixless triggers are only supported on root commands and command groups.',
+        { context: { command: definition.name } },
+      );
+    }
+
+    if (Array.isArray(definition.prefixless)) {
+      const available = new Set(commandNames(definition).map((name) => name.value.toLowerCase()));
+      for (const trigger of definition.prefixless) {
+        const normalized = trigger.trim().toLowerCase();
+        if (!normalized || /\s/.test(trigger) || !available.has(normalized)) {
+          throw new WhaNextError(
+            'ARGUMENT_INVALID',
+            'Every prefixless trigger must match the command name or one of its aliases.',
+            { context: { command: definition.name, trigger } },
+          );
+        }
+      }
+    }
+
     if (!isCommandGroup(definition)) return;
     if (definition.subcommands.length === 0) {
       throw new WhaNextError('ARGUMENT_INVALID', `The command group "${definition.name}" is empty.`);
@@ -525,6 +581,39 @@ async function composeMiddleware(
     await current(context, () => dispatch(position + 1));
   };
   await dispatch(0);
+}
+
+function normalizePrefixes(input: string | readonly string[]): readonly string[] {
+  const values = typeof input === 'string' ? [input] : [...input];
+  const prefixes = [...new Set(values)];
+
+  if (prefixes.length === 0) {
+    throw new WhaNextError('ARGUMENT_INVALID', 'At least one command prefix is required.');
+  }
+
+  for (const prefix of prefixes) {
+    if (prefix.length === 0 || /\s/.test(prefix)) {
+      throw new WhaNextError(
+        'ARGUMENT_INVALID',
+        'Command prefixes cannot be empty or contain whitespace.',
+        { context: { prefix } },
+      );
+    }
+  }
+
+  return prefixes;
+}
+
+function prefixlessCommandNames(
+  definition: CommandDefinition,
+): Array<{ value: string; locale?: string }> {
+  if (!definition.prefixless) return [];
+
+  const names = commandNames(definition);
+  if (definition.prefixless === true) return names;
+
+  const enabled = new Set(definition.prefixless.map((name) => name.toLowerCase()));
+  return names.filter((name) => enabled.has(name.value.toLowerCase()));
 }
 
 function commandNames(definition: CommandDefinition): Array<{ value: string; locale?: string }> {

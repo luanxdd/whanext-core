@@ -200,6 +200,103 @@ describe('modern commands', () => {
     await provider.events.emit('message', makeMessage('&menu'));
   });
 
+
+  it('supports multiple prefixes and opt-in prefixless aliases', async () => {
+    const provider = new FakeProvider();
+    const app = await create({ provider, prefix: ['&', '!', '.'] });
+    const prefixes: string[] = [];
+
+    app.commands.command(defineCommand({
+      name: 'open',
+      aliases: ['abrir', 'a'],
+      prefixless: ['a'],
+      description: 'Abre o grupo.',
+      execute(ctx) {
+        prefixes.push(ctx.prefix);
+        expect(ctx.commands.prefix).toBe('&');
+        expect(ctx.commands.prefixes).toEqual(['&', '!', '.']);
+      },
+    }));
+
+    await provider.events.emit('message', makeMessage('&open', 'multi-1'));
+    await provider.events.emit('message', makeMessage('!abrir', 'multi-2'));
+    await provider.events.emit('message', makeMessage('.a', 'multi-3'));
+    await provider.events.emit('message', makeMessage('a', 'prefixless-1'));
+    await provider.events.emit('message', makeMessage('open', 'prefixless-blocked-1'));
+    await provider.events.emit('message', makeMessage('abrir', 'prefixless-blocked-2'));
+
+    expect(prefixes).toEqual(['&', '!', '.', '']);
+  });
+
+  it('can activate or replace multiple prefixes at runtime', async () => {
+    const provider = new FakeProvider();
+    const app = await create({ provider, prefix: '&' });
+    const prefixes: string[] = [];
+
+    app.commands.command(defineCommand({
+      name: 'ping',
+      description: 'Ping.',
+      execute(ctx) {
+        prefixes.push(ctx.prefix);
+      },
+    }));
+
+    await provider.events.emit('message', makeMessage('!ping', 'before-runtime-prefix'));
+    app.commands.setPrefixes(['&', '!']);
+    await provider.events.emit('message', makeMessage('!ping', 'after-runtime-prefix'));
+    app.commands.setPrefixes('&');
+    await provider.events.emit('message', makeMessage('!ping', 'disabled-runtime-prefix'));
+    await provider.events.emit('message', makeMessage('&ping', 'primary-runtime-prefix'));
+
+    expect(prefixes).toEqual(['!', '&']);
+    expect(app.commands.prefix).toBe('&');
+    expect(app.commands.prefixes).toEqual(['&']);
+  });
+
+  it('prefers the longest configured prefix when prefixes overlap', async () => {
+    const provider = new FakeProvider();
+    const app = await create({ provider, prefix: ['!', '!!'] });
+    const prefixes: string[] = [];
+
+    app.commands.command(defineCommand({
+      name: 'ping',
+      description: 'Ping.',
+      execute(ctx) {
+        prefixes.push(ctx.prefix);
+      },
+    }));
+
+    await provider.events.emit('message', makeMessage('!!ping', 'long-prefix'));
+    await provider.events.emit('message', makeMessage('!ping', 'short-prefix'));
+
+    expect(prefixes).toEqual(['!!', '!']);
+  });
+
+  it('routes interactive response ids through the same command router', async () => {
+    const provider = new FakeProvider();
+    const app = await create({ provider, prefix: '&' });
+    const execute = vi.fn();
+
+    app.commands.command(defineCommand({
+      name: 'open',
+      aliases: ['a'],
+      prefixless: ['a'],
+      description: 'Abre o grupo.',
+      execute,
+    }));
+
+    await provider.events.emit('message', {
+      ...makeMessage('Abrir grupo', 'interactive-command'),
+      interactive: { kind: 'list', id: '&open', title: 'Abrir grupo' },
+    });
+    await provider.events.emit('message', {
+      ...makeMessage('Abrir', 'interactive-prefixless'),
+      interactive: { kind: 'button', id: 'a', title: 'Abrir' },
+    });
+
+    expect(execute).toHaveBeenCalledTimes(2);
+  });
+
   it('dispatches command groups, subcommands and Portuguese/English aliases', async () => {
     const provider = new FakeProvider();
     const app = await create({ provider, prefix: '&' });

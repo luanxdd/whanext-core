@@ -1,9 +1,11 @@
 import type {
   ButtonsContent,
+  ListContent,
   MentionTarget,
   Message,
   MessageContent,
   MessageKey,
+  PollContent,
   RepostMessageOptions,
   SentMessage,
   TextContent,
@@ -70,6 +72,14 @@ export class MessageService {
   }
 
   buttons(chatId: string, content: ButtonsContent): Promise<SentMessage> {
+    return this.send(chatId, content);
+  }
+
+  list(chatId: string, content: ListContent): Promise<SentMessage> {
+    return this.send(chatId, content);
+  }
+
+  poll(chatId: string, content: PollContent): Promise<SentMessage> {
     return this.send(chatId, content);
   }
 }

@@ -69,7 +69,7 @@ export interface AppHealth {
 
 export interface WhaNextAppOptions {
   phone?: string;
-  prefix?: string;
+  prefix?: string | readonly string[];
   cache?: CacheOptions;
   logger?: LoggerConfig;
   mute?: MuteOptions;

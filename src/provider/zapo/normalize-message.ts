@@ -1,6 +1,7 @@
 import type { Proto, WaIncomingMessageEvent } from 'zapo-js';
 import { uniqueIdentities } from '@/models/identity.js';
 import type {
+  InteractiveResponse,
   MediaKind,
   Message,
   MessageContentKind,
@@ -48,10 +49,23 @@ export function unwrapZapoMessageContent(
   const nested = input.ephemeralMessage?.message
     ?? input.viewOnceMessage?.message
     ?? input.viewOnceMessageV2?.message
+    ?? viewOnceV2ExtensionMessage(input)
     ?? input.deviceSentMessage?.message
     ?? input.documentWithCaptionMessage?.message;
 
   return nested ? unwrapZapoMessageContent(nested) : input;
+}
+
+function viewOnceV2ExtensionMessage(
+  input: Proto.IMessage,
+): Proto.IMessage | undefined {
+  const extension = (input as Proto.IMessage & {
+    viewOnceMessageV2Extension?: {
+      message?: Proto.IMessage | null;
+    } | null;
+  }).viewOnceMessageV2Extension;
+
+  return extension?.message ?? undefined;
 }
 
 export function isZapoViewOnceContent(
@@ -59,7 +73,11 @@ export function isZapoViewOnceContent(
 ): boolean {
   if (!input) return false;
 
-  if (input.viewOnceMessage?.message || input.viewOnceMessageV2?.message) {
+  if (
+    input.viewOnceMessage?.message
+    || input.viewOnceMessageV2?.message
+    || viewOnceV2ExtensionMessage(input)
+  ) {
     return true;
   }
 
@@ -75,7 +93,7 @@ export function extractQuotedZapoMessage(
 
   if (!chatId || !content) return undefined;
 
-  const node = contentNode(content);
+  const { node } = contentNode(content);
   const context = getContextInfo(node);
 
   if (!context?.stanzaId || !context.quotedMessage) return undefined;
@@ -137,6 +155,7 @@ export function normalizeZapoMessage(
   const text = getText(content);
   const caption = getCaption(content);
   const quoted = getQuoted(context, chatId);
+  const interactive = getInteractiveResponse(content);
 
   const message: Message = {
     id,
@@ -165,6 +184,7 @@ export function normalizeZapoMessage(
   if (caption !== undefined) message.caption = caption;
   if (media !== undefined) message.media = media;
   if (quoted !== undefined) message.quoted = quoted;
+  if (interactive !== undefined) message.interactive = interactive;
 
   return message;
 }
@@ -260,7 +280,99 @@ function getText(content: Proto.IMessage): string | undefined {
     ?? content.buttonsResponseMessage?.selectedDisplayText
     ?? content.listResponseMessage?.title
     ?? content.templateButtonReplyMessage?.selectedDisplayText
+    ?? content.pollCreationMessage?.name
+    ?? content.pollCreationMessageV2?.name
+    ?? content.pollCreationMessageV3?.name
+    ?? content.pollCreationMessageV5?.name
+    ?? getNativeFlowDisplayText(content)
     ?? undefined;
+}
+
+function getInteractiveResponse(content: Proto.IMessage): InteractiveResponse | undefined {
+  const buttons = content.buttonsResponseMessage as {
+    selectedButtonId?: string | null;
+    selectedDisplayText?: string | null;
+  } | null | undefined;
+  if (buttons?.selectedButtonId) {
+    return {
+      kind: 'button',
+      id: buttons.selectedButtonId,
+      ...(buttons.selectedDisplayText ? { title: buttons.selectedDisplayText } : {}),
+    };
+  }
+
+  const template = content.templateButtonReplyMessage as {
+    selectedId?: string | null;
+    selectedDisplayText?: string | null;
+  } | null | undefined;
+  if (template?.selectedId) {
+    return {
+      kind: 'button',
+      id: template.selectedId,
+      ...(template.selectedDisplayText ? { title: template.selectedDisplayText } : {}),
+    };
+  }
+
+  const list = content.listResponseMessage as {
+    title?: string | null;
+    singleSelectReply?: { selectedRowId?: string | null } | null;
+  } | null | undefined;
+  const rowId = list?.singleSelectReply?.selectedRowId;
+  if (rowId) {
+    return {
+      kind: 'list',
+      id: rowId,
+      ...(list?.title ? { title: list.title } : {}),
+    };
+  }
+
+  const native = nativeFlowParams(content);
+  const nativeId = stringField(native, ['id', 'selected_id', 'row_id', 'button_id']);
+  if (nativeId) {
+    const title = stringField(native, ['display_text', 'title']);
+    return {
+      kind: native && ('row_id' in native || 'selected_id' in native) ? 'list' : 'button',
+      id: nativeId,
+      ...(title ? { title } : {}),
+    };
+  }
+
+  return undefined;
+}
+
+function getNativeFlowDisplayText(content: Proto.IMessage): string | undefined {
+  return stringField(nativeFlowParams(content), ['display_text', 'title']);
+}
+
+function nativeFlowParams(content: Proto.IMessage): Record<string, unknown> | undefined {
+  const response = content.interactiveResponseMessage as {
+    nativeFlowResponseMessage?: {
+      paramsJson?: string | null;
+    } | null;
+  } | null | undefined;
+  const json = response?.nativeFlowResponseMessage?.paramsJson;
+  if (!json) return undefined;
+
+  try {
+    const parsed = JSON.parse(json) as unknown;
+    return typeof parsed === 'object' && parsed !== null
+      ? parsed as Record<string, unknown>
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function stringField(
+  value: Record<string, unknown> | undefined,
+  keys: readonly string[],
+): string | undefined {
+  if (!value) return undefined;
+  for (const key of keys) {
+    const field = value[key];
+    if (typeof field === 'string' && field.length > 0) return field;
+  }
+  return undefined;
 }
 
 function getCaption(content: Proto.IMessage): string | undefined {

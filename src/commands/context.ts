@@ -21,6 +21,7 @@ import type { UserService } from '@/services/user-service.js';
 
 export interface CommandCatalogView {
   readonly prefix: string;
+  readonly prefixes: readonly string[];
   readonly size: number;
   catalog(options?: { category?: string; includeHidden?: boolean }): readonly RegisteredCommand[];
   categories(): readonly string[];
@@ -102,6 +103,7 @@ interface CreateCommandContextOptions<Schema extends CommandOptionSchema> {
   services: CommandRuntimeServices;
   commands: CommandCatalogView;
   signal: AbortSignal;
+  prefix?: string;
   locale?: string;
 }
 
@@ -137,7 +139,7 @@ class CommandContextImplementation<Schema extends CommandOptionSchema> {
     this.chat = { id: options.message.chatId, isGroup: options.message.isGroup };
     this.command = options.command;
     this.commands = options.commands;
-    this.prefix = options.commands.prefix;
+    this.prefix = options.prefix ?? options.commands.prefix;
     this.options = options.options;
     this.args = options.args;
     this.locale = options.locale;

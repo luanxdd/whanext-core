@@ -34,7 +34,7 @@ await app.login({
 - API pública independente do provider, sem objetos ou tipos crus do Zapo.
 - Login por pairing code, sessão persistente e reconexão automática.
 - Uma ou várias contas independentes no mesmo processo com `createMulti()`.
-- Prefixo global e comandos declarativos com argumentos tipados.
+- Prefixo único ou múltiplos prefixos, aliases prefixless opt-in e comandos declarativos com argumentos tipados.
 - Comandos exclusivos da conta conectada com `guards.owner()` ou `onlyOwner`.
 - Usuários normalizados entre JID, LID e PN.
 - Mensagens, replies, edição, exclusão, revogações, menções, mídias e download normalizado.
@@ -103,7 +103,41 @@ await app.login({
 });
 ```
 
-O prefixo é definido uma vez. O router identifica o comando, remove o prefixo e cria o `ArgsParser` automaticamente.
+O prefixo pode ser único ou múltiplo. O router identifica qual prefixo foi usado, remove apenas esse prefixo e cria o `ArgsParser` automaticamente:
+
+```ts
+const app = await create({
+  prefix: ['&', '!', '.'],
+});
+```
+
+O primeiro valor (`&`, no exemplo) é o prefixo principal usado por `app.commands.prefix` e pelo help automático. Todos ficam disponíveis em `app.commands.prefixes`.
+
+O modo multi-prefixo também pode ser ativado ou trocado em runtime:
+
+```ts
+app.commands.setPrefixes(['&', '!']);
+
+// volta para um único prefixo
+app.commands.setPrefixes('&');
+```
+
+Comandos sem prefixo são **opt-in** e podem liberar somente aliases específicos:
+
+```ts
+app.commands.command(defineCommand({
+  name: 'open',
+  aliases: ['abrir', 'a'],
+  prefixless: ['a'],
+  onlyGroup: true,
+  botMustBeAdmin: true,
+  async execute(ctx) {
+    await ctx.groups.open(ctx.chatId);
+  },
+}));
+```
+
+Nesse exemplo, `&open`, `!open`, `.abrir`, `&a` e `a` funcionam. `open` e `abrir` sem prefixo continuam sendo texto normal. Use `prefixless: true` somente quando quiser liberar sem prefixo o nome e todos os aliases daquele comando.
 
 ## Múltiplas contas
 
@@ -370,9 +404,11 @@ await app.message.react(sent, '👏🏻');
 await app.message.unreact(sent);
 ```
 
-### Botões interativos
+### Interativos
 
-Por enquanto, a API pública suporta botões de **copiar código** e **abrir link**:
+#### Botões
+
+A API pública suporta botões de **copiar**, **abrir link** e **resposta rápida com ID**:
 
 ```ts
 await app.message.buttons(chatId, {
@@ -380,33 +416,74 @@ await app.message.buttons(chatId, {
   text: 'Escolha uma ação:',
   footer: 'WhaNext',
   buttons: [
-    {
-      type: 'copy',
-      label: 'Copiar código',
-      code: 'ABC-123',
-    },
-    {
-      type: 'link',
-      label: 'Abrir painel',
-      url: 'https://example.com',
-    },
+    { type: 'copy', label: 'Copiar código', code: 'ABC-123' },
+    { type: 'link', label: 'Abrir painel', url: 'https://example.com' },
+    { type: 'reply', label: 'Abrir grupo', id: '&open' },
   ],
 });
 ```
 
-Também funciona diretamente em replies de comandos, sem importar tipos do provider:
+Também funciona diretamente em replies de comandos. Quando o usuário toca em um botão `reply`, o ID recebido fica em `message.interactive.id`; se esse ID representa um comando válido, o router o executa automaticamente.
 
 ```ts
 await ctx.reply({
   text: 'Use uma das opções abaixo.',
   buttons: [
-    { type: 'copy', label: 'Copiar', code: 'ABC-123' },
-    { type: 'link', label: 'Abrir site', url: 'https://example.com' },
+    { type: 'reply', label: 'Abrir', id: 'a' },
+    { type: 'link', label: 'Ajuda', url: 'https://example.com' },
   ],
 });
 ```
 
-`title`, `footer` e `mentions` são opcionais. Os botões podem ser combinados na mesma mensagem.
+`title`, `footer` e `mentions` são opcionais. Os tipos podem ser combinados na mesma mensagem.
+
+#### Menu de lista
+
+Para menus maiores, use uma lista single-select com seções e IDs estáveis:
+
+```ts
+await app.message.list(chatId, {
+  title: 'Administração',
+  text: 'Escolha uma ação para o grupo.',
+  buttonText: 'Ver opções',
+  footer: 'WhaNext',
+  list: [
+    {
+      title: 'Grupo',
+      rows: [
+        { id: '&open', title: 'Abrir grupo', description: 'Libera mensagens' },
+        { id: '&close', title: 'Fechar grupo', description: 'Somente admins' },
+      ],
+    },
+  ],
+});
+```
+
+A escolha chega normalizada em `message.interactive`:
+
+```ts
+app.on('message', (message) => {
+  if (message.interactive) {
+    console.log(message.interactive.kind); // 'button' | 'list'
+    console.log(message.interactive.id);
+  }
+});
+```
+
+IDs como `&open` entram no router com prefixo. IDs como `a` entram sem prefixo somente quando aquele gatilho foi liberado com `prefixless`.
+
+#### Enquetes
+
+```ts
+await app.message.poll(chatId, {
+  poll: 'Verdade ou desafio?',
+  options: ['Verdade', 'Desafio'],
+  selectableCount: 1,
+  allowAddOption: false,
+});
+```
+
+`selectableCount` é opcional e assume `1`. A pergunta de uma poll recebida também fica disponível em `message.text`, com `message.contentKind === 'poll'`.
 
 `delete()` aceita `Message`, `SentMessage` ou `MessageKey`.
 
@@ -839,7 +916,7 @@ export default defineCommand({
 });
 ```
 
-`ctx.commands` fornece `catalog()`, `categories()`, `find()`, `has()`, `size` e `prefix`; ele não expõe detalhes internos do provider.
+`ctx.commands` fornece `catalog()`, `categories()`, `find()`, `has()`, `size`, `prefix` e `prefixes`; ele não expõe detalhes internos do provider. `ctx.prefix` contém o prefixo que acionou aquela execução e é `''` quando o comando foi disparado por um gatilho prefixless.
 
 Se for necessário controlar extensões ou recursão:
 

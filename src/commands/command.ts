@@ -38,6 +38,7 @@ export interface CommandMetadata {
   name: string;
   description: string;
   aliases?: readonly string[];
+  prefixless?: boolean | readonly string[];
   category?: string;
   usage?: string;
   examples?: readonly string[];

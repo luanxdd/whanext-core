@@ -53,6 +53,14 @@ export interface QuotedMessage {
   media?: MessageMedia;
 }
 
+export type InteractiveResponseKind = 'button' | 'list';
+
+export interface InteractiveResponse {
+  kind: InteractiveResponseKind;
+  id: string;
+  title?: string;
+}
+
 export interface MessageDeleted {
   key: MessageKey;
   message?: Message;
@@ -93,6 +101,7 @@ export interface Message {
   contentKind?: MessageContentKind;
   media?: MessageMedia;
   quoted?: QuotedMessage;
+  interactive?: InteractiveResponse;
 }
 
 export interface SentMessage {
@@ -139,9 +148,16 @@ export interface CopyCodeButton {
   code: string;
 }
 
+export interface QuickReplyButton {
+  type: 'reply';
+  label: string;
+  id: string;
+}
+
 export type MessageButton =
   | LinkButton
-  | CopyCodeButton;
+  | CopyCodeButton
+  | QuickReplyButton;
 
 export interface ButtonsContent {
   text: string;
@@ -149,6 +165,33 @@ export interface ButtonsContent {
   title?: string;
   footer?: string;
   mentions?: MentionTarget[];
+}
+
+export interface ListRow {
+  id: string;
+  title: string;
+  description?: string;
+}
+
+export interface ListSection {
+  title?: string;
+  rows: readonly ListRow[];
+}
+
+export interface ListContent {
+  list: readonly ListSection[];
+  text: string;
+  buttonText: string;
+  title?: string;
+  footer?: string;
+  mentions?: MentionTarget[];
+}
+
+export interface PollContent {
+  poll: string;
+  options: readonly string[];
+  selectableCount?: number;
+  allowAddOption?: boolean;
 }
 
 export interface ImageContent {
@@ -179,6 +222,8 @@ export interface StickerContent {
 export type MessageContent = 
   | TextContent
   | ButtonsContent
+  | ListContent
+  | PollContent
   | ImageContent 
   | VideoContent 
   | AudioContent

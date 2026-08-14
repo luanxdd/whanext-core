@@ -796,6 +796,130 @@ describe('ZapoProvider', () => {
     expect(deletes).toEqual(['target']);
   });
 
+  it('processes live protocol mutations even when Zapo marks the protocol envelope as offline', async () => {
+    const { provider, client: current } = await connectedProvider();
+    const edits: Array<{ previous?: string; current?: string }> = [];
+    const deletes: Array<{ id: string; text?: string }> = [];
+    provider.on('messageEdited', (event) => {
+      edits.push({
+        ...(event.previous?.text !== undefined ? { previous: event.previous.text } : {}),
+        ...(event.message.text !== undefined ? { current: event.message.text } : {}),
+      });
+    });
+    provider.on('messageDeleted', (event) => {
+      deletes.push({
+        id: event.key.id,
+        ...(event.message?.text !== undefined ? { text: event.message.text } : {}),
+      });
+    });
+    const now = Math.floor(Date.now() / 1_000);
+
+    current.emit('message', {
+      key: { id: 'live-target', remoteJid: '5511@s.whatsapp.net', fromMe: false },
+      message: { conversation: 'original' },
+      timestampSeconds: now,
+    });
+    current.emit('message_protocol', {
+      key: { id: 'live-edit', remoteJid: '5511@s.whatsapp.net', fromMe: false },
+      message: {},
+      timestampSeconds: now,
+      offline: true,
+      protocolMessage: {
+        type: 14,
+        key: { id: 'live-target', fromMe: false },
+        editedMessage: { conversation: 'editada' },
+      },
+    });
+    current.emit('message_protocol', {
+      key: { id: 'live-delete', remoteJid: '5511@s.whatsapp.net', fromMe: false },
+      message: {},
+      timestampSeconds: now,
+      offline: true,
+      protocolMessage: {
+        type: 0,
+        key: { id: 'live-target', fromMe: false },
+      },
+    });
+    await Promise.resolve();
+
+    expect(edits).toEqual([{ previous: 'original', current: 'editada' }]);
+    expect(deletes).toEqual([{ id: 'live-target', text: 'editada' }]);
+  });
+
+  it('recognizes protocol mutations when they surface through the regular message payload', async () => {
+    const { provider, client: current } = await connectedProvider();
+    const edits: string[] = [];
+    const deletes: string[] = [];
+    provider.on('messageEdited', (event) => edits.push(event.message.text ?? ''));
+    provider.on('messageDeleted', (event) => deletes.push(event.key.id));
+    const now = Math.floor(Date.now() / 1_000);
+
+    current.emit('message', {
+      key: { id: 'wrapped-target', remoteJid: '5511@s.whatsapp.net', fromMe: false },
+      message: { conversation: 'antes' },
+      timestampSeconds: now,
+    });
+    current.emit('message', {
+      key: { id: 'wrapped-edit-event', remoteJid: '5511@s.whatsapp.net', fromMe: false },
+      message: {
+        protocolMessage: {
+          type: 14,
+          key: { id: 'wrapped-target', fromMe: false },
+          editedMessage: {
+            editedMessage: { message: { conversation: 'depois' } },
+          },
+        },
+      },
+      timestampSeconds: now,
+    });
+    current.emit('message', {
+      key: { id: 'wrapped-revoke-event', remoteJid: '5511@s.whatsapp.net', fromMe: false },
+      message: {
+        protocolMessage: {
+          type: 0,
+          key: { id: 'wrapped-target', fromMe: false },
+        },
+      },
+      timestampSeconds: now,
+    });
+    await Promise.resolve();
+
+    expect(edits).toEqual(['depois']);
+    expect(deletes).toEqual(['wrapped-target']);
+  });
+
+  it('accepts decrypted edit addons that carry a nested protocol message instead of message_edit kind', async () => {
+    const { provider, client: current } = await connectedProvider();
+    const edits: Array<{ previous?: string; current?: string }> = [];
+    provider.on('messageEdited', (event) => {
+      edits.push({
+        ...(event.previous?.text !== undefined ? { previous: event.previous.text } : {}),
+        ...(event.message.text !== undefined ? { current: event.message.text } : {}),
+      });
+    });
+    const now = Math.floor(Date.now() / 1_000);
+
+    current.emit('message', {
+      key: { id: 'addon-target', remoteJid: '5511@s.whatsapp.net', fromMe: false },
+      message: { conversation: 'antes' },
+      timestampSeconds: now,
+    });
+    current.emit('message_addon', {
+      key: { id: 'addon-edit-event', remoteJid: '5511@s.whatsapp.net', fromMe: false },
+      decrypted: {
+        protocolMessage: {
+          type: 14,
+          key: { id: 'addon-target', fromMe: false },
+          editedMessage: { conversation: 'depois' },
+        },
+      },
+      timestampSeconds: now,
+    });
+    await Promise.resolve();
+
+    expect(edits).toEqual([{ previous: 'antes', current: 'depois' }]);
+  });
+
   it('translates decrypted secret edit addons into messageEdited', async () => {
     const { provider, client: current } = await connectedProvider();
     const edits: Array<{ previous: string | undefined; current: string | undefined }> = [];

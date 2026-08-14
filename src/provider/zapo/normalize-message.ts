@@ -51,9 +51,20 @@ export function unwrapZapoMessageContent(
     ?? input.viewOnceMessageV2?.message
     ?? viewOnceV2ExtensionMessage(input)
     ?? input.deviceSentMessage?.message
-    ?? input.documentWithCaptionMessage?.message;
+    ?? input.documentWithCaptionMessage?.message
+    ?? editedWrapperMessage(input);
 
   return nested ? unwrapZapoMessageContent(nested) : input;
+}
+
+function editedWrapperMessage(
+  input: Proto.IMessage,
+): Proto.IMessage | undefined {
+  const edited = (input as Proto.IMessage & {
+    editedMessage?: { message?: Proto.IMessage | null } | null;
+  }).editedMessage;
+
+  return edited?.message ?? undefined;
 }
 
 function viewOnceV2ExtensionMessage(

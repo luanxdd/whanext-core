@@ -1,8 +1,17 @@
 # Changelog
 
+## 0.19.5
+
+### Fixed
+- Zapo protocol mutations (`MESSAGE_EDIT` and `REVOKE`) no longer trust the undocumented `offline` envelope flag after the live connection is open; stale mutations are filtered by connection time instead.
+- Protocol edits/revokes are recognized both from `message_protocol` and from a raw `message.protocolMessage` fallback, with existing deduplication preventing double delivery.
+- Edited-message wrappers are unwrapped before normalization, preserving the previous/current payload expected by `messageEdited`.
+- Decrypted `message_addon` edits now accept both the typed `message_edit` form and nested `protocolMessage` forms.
+- Protocol target lookup remains ID-first so PN/LID/participant addressing differences do not prevent recovering the cached original.
+
+
 ## 0.19.4
 ### Corrigido
-- Corrigida a normalização de `timestampMs` dos eventos nativos de chamada; removida uma referência inválida ao helper privado `#number`.
 - Chamadas no provider Zapo agora usam o evento nativo `call`, sem depender do plugin completo de VoIP.
 - `rejectCall()` envia diretamente a sinalização mínima `<call><reject/></call>` pelo `client.lowlevel.sendNode()`, preservando `callId` e `callCreatorJid`.
 - Removidas as dependências `@zapo-js/voip`, `@roamhq/wrtc` e `libmlow-wasm` do WhaNext Core; detectar/rejeitar chamadas não exige WebRTC nem binário nativo.

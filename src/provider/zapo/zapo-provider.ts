@@ -97,6 +97,8 @@ interface ZapoAddonEventLike {
   targetMessageId?: string | null;
   decrypted?: unknown;
   raw?: Proto.IMessage | null;
+  message?: Proto.IMessage | null;
+  timestampSeconds?: number | null;
   offline?: boolean | null;
 }
 
@@ -607,6 +609,15 @@ export class ZapoProvider implements WhatsAppProvider {
     });
 
     client.on('message', (event) => {
+      const protocol = this.#protocolMessage(event as unknown as ZapoProtocolEventLike);
+      if (protocol && this.#isMessageMutationProtocol(protocol.type)) {
+        this.#handleProtocolEvent({
+          ...(event as unknown as ZapoProtocolEventLike),
+          protocolMessage: protocol,
+        });
+        return;
+      }
+
       this.#handleMessage(event);
     });
 
@@ -690,28 +701,88 @@ export class ZapoProvider implements WhatsAppProvider {
   }
 
   #handleAddonEvent(event: ZapoAddonEventLike): void {
-    if (event.kind !== 'message_edit' || !event.targetMessageId) return;
+    const decrypted = this.#addonRecord(event.decrypted);
+    const protocol = this.#addonProtocolMessage(decrypted);
+    const kind = event.kind ?? this.#stringField(decrypted, 'kind') ?? this.#stringField(decrypted, 'type');
+    const isEdit = kind === 'message_edit'
+      || protocol?.type === proto.Message.ProtocolMessage.Type.MESSAGE_EDIT;
 
-    const editedMessage = this.#addonEditedMessage(event.decrypted);
+    if (!isEdit) return;
+
+    const targetMessageId = event.targetMessageId
+      ?? this.#stringField(decrypted, 'targetMessageId')
+      ?? this.#stringField(decrypted, 'targetMessageID')
+      ?? protocol?.key?.id
+      ?? undefined;
+    if (!targetMessageId) return;
+
+    const editedMessage = protocol?.editedMessage ?? this.#addonEditedMessage(event.decrypted);
     if (!editedMessage) return;
 
+    const protocolKey = protocol?.key;
     const target: ZapoMessageKeyLike = {
-      id: event.targetMessageId,
-      ...(event.key.remoteJid !== undefined ? { remoteJid: event.key.remoteJid } : {}),
-      ...(event.key.fromMe !== undefined ? { fromMe: event.key.fromMe } : {}),
-      ...(event.key.participant !== undefined ? { participant: event.key.participant } : {}),
-      ...(event.key.participantAlt !== undefined ? { participantAlt: event.key.participantAlt } : {}),
+      ...(protocolKey ?? {}),
+      id: targetMessageId,
+      ...(protocolKey?.remoteJid !== undefined
+        ? { remoteJid: protocolKey.remoteJid }
+        : event.key.remoteJid !== undefined
+          ? { remoteJid: event.key.remoteJid }
+          : {}),
+      ...(protocolKey?.fromMe !== undefined
+        ? { fromMe: protocolKey.fromMe }
+        : event.key.fromMe !== undefined
+          ? { fromMe: event.key.fromMe }
+          : {}),
+      ...(protocolKey?.participant !== undefined
+        ? { participant: protocolKey.participant }
+        : event.key.participant !== undefined
+          ? { participant: event.key.participant }
+          : {}),
+      ...(protocolKey?.participantAlt !== undefined
+        ? { participantAlt: protocolKey.participantAlt }
+        : event.key.participantAlt !== undefined
+          ? { participantAlt: event.key.participantAlt }
+          : {}),
     };
 
     this.#handleProtocolEvent({
       key: event.key,
-      ...(event.offline !== undefined ? { offline: event.offline } : {}),
+      ...(event.timestampSeconds !== undefined ? { timestampSeconds: event.timestampSeconds } : {}),
       protocolMessage: {
         type: proto.Message.ProtocolMessage.Type.MESSAGE_EDIT,
         key: target,
         editedMessage,
+        ...(protocol?.timestampMs !== undefined ? { timestampMs: protocol.timestampMs } : {}),
       },
     });
+  }
+
+  #addonRecord(value: unknown): Record<string, unknown> | undefined {
+    return value && typeof value === 'object' ? value as Record<string, unknown> : undefined;
+  }
+
+  #stringField(record: Record<string, unknown> | undefined, field: string): string | undefined {
+    const value = record?.[field];
+    return typeof value === 'string' && value.length > 0 ? value : undefined;
+  }
+
+  #addonProtocolMessage(
+    record: Record<string, unknown> | undefined,
+  ): ZapoProtocolEventLike['protocolMessage'] | undefined {
+    const direct = record?.protocolMessage;
+    if (direct && typeof direct === 'object') {
+      return direct as NonNullable<ZapoProtocolEventLike['protocolMessage']>;
+    }
+
+    const message = record?.message;
+    if (message && typeof message === 'object') {
+      const nested = (message as Record<string, unknown>).protocolMessage;
+      if (nested && typeof nested === 'object') {
+        return nested as NonNullable<ZapoProtocolEventLike['protocolMessage']>;
+      }
+    }
+
+    return undefined;
   }
 
   #addonEditedMessage(value: unknown): Proto.IMessage | undefined {
@@ -725,17 +796,50 @@ export class ZapoProvider implements WhatsAppProvider {
     }
 
     const edited = record.editedMessage;
-    if (edited && typeof edited === 'object') return edited as Proto.IMessage;
+    if (edited && typeof edited === 'object') {
+      const nested = (edited as Record<string, unknown>).message;
+      return (nested && typeof nested === 'object' ? nested : edited) as Proto.IMessage;
+    }
 
     const message = record.message;
-    if (message && typeof message === 'object') return message as Proto.IMessage;
+    if (message && typeof message === 'object') {
+      const messageRecord = message as Record<string, unknown>;
+      const nestedEdited = messageRecord.editedMessage;
+      if (nestedEdited && typeof nestedEdited === 'object') {
+        const nested = (nestedEdited as Record<string, unknown>).message;
+        if (nested && typeof nested === 'object') return nested as Proto.IMessage;
+      }
+      return message as Proto.IMessage;
+    }
 
     return value as Proto.IMessage;
   }
 
+  #protocolMessage(event: ZapoProtocolEventLike): ZapoProtocolEventLike['protocolMessage'] | undefined {
+    if (event.protocolMessage) return event.protocolMessage;
+
+    const content = unwrapZapoMessageContent(event.message);
+    return content?.protocolMessage as ZapoProtocolEventLike['protocolMessage'];
+  }
+
+  #isMessageMutationProtocol(type: number | null | undefined): boolean {
+    return type === proto.Message.ProtocolMessage.Type.REVOKE
+      || type === proto.Message.ProtocolMessage.Type.MESSAGE_EDIT;
+  }
+
+  #shouldIgnoreProtocolEvent(event: ZapoProtocolEventLike): boolean {
+    if (this.#options.processOfflineMessages === true) return false;
+    if (!this.#connected) return true;
+    if (!this.#connectedAtSeconds || event.timestampSeconds == null) return false;
+
+    const timestamp = toSeconds(event.timestampSeconds);
+    if (timestamp === undefined) return false;
+    return timestamp < this.#connectedAtSeconds - 3;
+  }
+
   #handleProtocolEvent(event: ZapoProtocolEventLike): void {
-    if (this.#isOfflineMessage(event)) {
-      this.#logger.debug('Ignored protocol event queued before the current live connection.', {
+    if (this.#shouldIgnoreProtocolEvent(event)) {
+      this.#logger.debug('Ignored protocol mutation from before the current live connection.', {
         messageId: event.key.id ?? undefined,
         chatId: event.key.remoteJid ?? undefined,
         timestampSeconds: event.timestampSeconds ?? undefined,
@@ -743,12 +847,17 @@ export class ZapoProvider implements WhatsAppProvider {
       return;
     }
 
-    const protocol = event.protocolMessage
-      ?? (event.message?.protocolMessage as ZapoProtocolEventLike['protocolMessage']);
-    if (!protocol) return;
+    const protocol = this.#protocolMessage(event);
+    if (!protocol || !this.#isMessageMutationProtocol(protocol.type)) return;
 
     const protocolKey = protocol.key;
-    if (!protocolKey?.id) return;
+    if (!protocolKey?.id) {
+      this.#logger.debug('Ignored Zapo protocol mutation without a target message id.', {
+        messageId: event.key.id ?? undefined,
+        protocolType: protocol.type ?? undefined,
+      });
+      return;
+    }
 
     const remoteJid = protocolKey.remoteJid ?? event.key.remoteJid;
     const participant = protocolKey.participant ?? event.key.participant;
@@ -760,10 +869,11 @@ export class ZapoProvider implements WhatsAppProvider {
       ...(participantAlt !== undefined ? { participantAlt } : {}),
     };
 
+    const stored = this.#findStoredMessage(target);
+    if (!target.remoteJid && stored?.key.remoteJid) target.remoteJid = stored.key.remoteJid;
     if (!target.remoteJid) return;
 
-    const stored = this.#findStoredMessage(target);
-    const type = protocol?.type;
+    const type = protocol.type;
     const mutationKey = this.#protocolDeliveryKey(event, target, type);
 
     if (mutationKey && this.#handledProtocolStore.has(mutationKey)) {
@@ -782,6 +892,13 @@ export class ZapoProvider implements WhatsAppProvider {
         ?? event.key.participantAlt
         ?? (deletedByMe ? this.getCurrentUserIds()[0] : event.key.remoteJid ?? undefined);
 
+      if (!previous) {
+        this.#logger.debug('Zapo revoke target was not present in the recent message cache.', {
+          targetMessageId: target.id ?? undefined,
+          chatId: target.remoteJid ?? undefined,
+        });
+      }
+
       void this.#events.emit('messageDeleted', {
         key: previous?.keys ?? normalizeZapoKey(target),
         ...(previous ? { message: previous } : {}),
@@ -792,9 +909,10 @@ export class ZapoProvider implements WhatsAppProvider {
       return;
     }
 
-    if (type !== proto.Message.ProtocolMessage.Type.MESSAGE_EDIT || !protocol.editedMessage) {
-      return;
-    }
+    const editedContent = protocol.editedMessage
+      ? this.#unwrapEditedContent(protocol.editedMessage)
+      : undefined;
+    if (!editedContent) return;
 
     const pushName = event.pushName ?? stored?.pushName;
     const edited: StoredZapoMessage = {
@@ -803,7 +921,7 @@ export class ZapoProvider implements WhatsAppProvider {
         ...(stored?.key ?? {}),
         ...target,
       },
-      message: protocol.editedMessage,
+      message: editedContent,
       timestampSeconds: toSeconds(protocol.timestampMs)
         ?? event.timestampSeconds
         ?? stored?.timestampSeconds
@@ -822,6 +940,13 @@ export class ZapoProvider implements WhatsAppProvider {
       ?? event.key.participantAlt
       ?? (editedByMe ? this.getCurrentUserIds()[0] : event.key.remoteJid ?? undefined);
 
+    if (!previous) {
+      this.#logger.debug('Zapo edit target was not present in the recent message cache.', {
+        targetMessageId: target.id ?? undefined,
+        chatId: target.remoteJid ?? undefined,
+      });
+    }
+
     void this.#events.emit('messageEdited', {
       key: message.keys,
       ...(previous ? { previous } : {}),
@@ -830,6 +955,13 @@ export class ZapoProvider implements WhatsAppProvider {
       ...(editedById ? { editedById } : {}),
       editedAt: message.timestamp,
     });
+  }
+
+  #unwrapEditedContent(message: Proto.IMessage): Proto.IMessage {
+    const wrapper = (message as Proto.IMessage & {
+      editedMessage?: { message?: Proto.IMessage | null } | null;
+    }).editedMessage;
+    return wrapper?.message ?? message;
   }
 
   #handleGroupEvent(event: ZapoGroupEventLike): void {

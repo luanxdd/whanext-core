@@ -994,6 +994,8 @@ app.on('call', async (call) => {
 
 `call.status` reflete o ciclo da chamada (`offer`, `ringing`, `preaccept`, `timeout`, `reject`, `accept`). `call.isVideo` e `call.isGroup` indicam o tipo. Somente chamadas em `offer` podem ser rejeitadas.
 
+No provider Zapo, detecção e rejeição usam apenas a sinalização nativa de chamadas e `client.lowlevel.sendNode()`. O WhaNext não carrega o stack completo de VoIP/WebRTC para esse fluxo.
+
 ## Erros
 
 ```ts

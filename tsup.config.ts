@@ -12,6 +12,5 @@ export default defineConfig({
     'zapo-js',
     '@zapo-js/store-sqlite',
     '@zapo-js/media-utils',
-    '@zapo-js/voip',
   ],
 });

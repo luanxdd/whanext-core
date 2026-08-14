@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.19.4
+### Corrigido
+- Corrigida a normalização de `timestampMs` dos eventos nativos de chamada; removida uma referência inválida ao helper privado `#number`.
+- Chamadas no provider Zapo agora usam o evento nativo `call`, sem depender do plugin completo de VoIP.
+- `rejectCall()` envia diretamente a sinalização mínima `<call><reject/></call>` pelo `client.lowlevel.sendNode()`, preservando `callId` e `callCreatorJid`.
+- Removidas as dependências `@zapo-js/voip`, `@roamhq/wrtc` e `libmlow-wasm` do WhaNext Core; detectar/rejeitar chamadas não exige WebRTC nem binário nativo.
+- O `callCreatorJid` técnico é mantido em cache limitado para que a rejeição use o endereço de protocolo correto mesmo quando o evento público expõe o `callerPnJid`.
+
+### Compatibilidade
+- A API pública permanece igual: `app.on('call')`, `CallEvent` e `rejectCall(callId, from)` não mudam para consumidores.
+- O suporte completo a aceitar/realizar chamadas VoIP não faz parte da API pública do WhaNext.
+
 ## 0.19.3
 ### Corrigido
 - Carregamento lazy do plugin VoIP do Zapo para evitar importar o runtime WebRTC em consumidores e testes que não inicializam o provider.

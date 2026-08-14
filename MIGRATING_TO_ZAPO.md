@@ -58,7 +58,7 @@ O provider usa `@zapo-js/media-utils`. Para processamento completo de imagem, v�
 
 ## Chamadas
 
-O suporte a `app.on('call')` e `rejectCall()` usa o plugin oficial `@zapo-js/voip`. As dependências de runtime do plugin já fazem parte do pacote do WhaNext v0.18.
+A partir da v0.19.4, `app.on('call')` usa o evento `call` nativo do Zapo e `rejectCall()` envia somente a sinalização de rejeição pelo `client.lowlevel`. O WhaNext não carrega o stack completo de VoIP/WebRTC para detectar ou rejeitar chamadas.
 
 ## Checklist de atualização
 

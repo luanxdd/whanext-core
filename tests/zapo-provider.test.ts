@@ -61,8 +61,8 @@ const { mocks, MockClient } = vi.hoisted(() => {
     readonly presence = {
       sendChatstate: vi.fn(async () => undefined),
     };
-    readonly voip = {
-      rejectCall: vi.fn(async () => undefined),
+    readonly lowlevel = {
+      sendNode: vi.fn(async (_node: unknown) => undefined),
     };
     readonly options: unknown;
     readonly logger: unknown;
@@ -141,10 +141,6 @@ vi.mock('@zapo-js/store-sqlite', () => ({
 
 vi.mock('@zapo-js/media-utils', () => ({
   createMediaProcessor: vi.fn(() => ({ kind: 'media-processor' })),
-}));
-
-vi.mock('@zapo-js/voip', () => ({
-  voipPlugin: vi.fn((options: unknown) => ({ kind: 'voip', options })),
 }));
 
 function client(): MockClientInstance {
@@ -895,44 +891,62 @@ describe('ZapoProvider', () => {
     expect(current.group.promoteParticipants).toHaveBeenCalledWith('123@g.us', ['100@lid']);
   });
 
-  it('maps Zapo VoIP events and rejects calls through the plugin', async () => {
+  it('maps the native Zapo call event and rejects without the VoIP plugin', async () => {
     const { provider, client: current } = await connectedProvider();
     const statuses: string[] = [];
+    const from: string[] = [];
     provider.on('call', (call) => {
       statuses.push(call.status);
+      from.push(call.from);
     });
 
-    current.emit('voip_call_incoming', {
+    current.emit('call', {
+      type: 'offer',
       callId: 'call-1',
-      peerJid: '5511999999999@s.whatsapp.net',
-      callerPn: '5511999999999@s.whatsapp.net',
-      mediaType: 'audio',
-      createdAt: new Date(),
-      stateData: { state: 'incoming_ringing' },
+      callCreatorJid: '123456789@lid',
+      callerPnJid: '5511999999999@s.whatsapp.net',
+      isVideo: false,
+      groupJid: null,
     });
-    current.emit('voip_call_state', {
+    current.emit('call', {
+      type: 'accept',
       callId: 'call-1',
-      peerJid: '5511999999999@s.whatsapp.net',
-      mediaType: 'audio',
-      stateData: { state: 'active' },
+      callCreatorJid: '123456789@lid',
+      callerPnJid: '5511999999999@s.whatsapp.net',
+      isVideo: false,
     });
-    current.emit('voip_call_state', {
+    current.emit('call', {
+      type: 'terminate',
       callId: 'call-1',
-      peerJid: '5511999999999@s.whatsapp.net',
-      mediaType: 'audio',
-      stateData: { state: 'ended', endReason: 'timeout' },
+      callCreatorJid: '123456789@lid',
+      callerPnJid: '5511999999999@s.whatsapp.net',
+      isVideo: false,
     });
-    current.emit('voip_call_ended', {
-      callId: 'call-1',
-      peerJid: '5511999999999@s.whatsapp.net',
-      mediaType: 'audio',
-      stateData: { state: 'ended', endReason: 'timeout' },
-    });
+
     await provider.rejectCall('call-1', '5511999999999@s.whatsapp.net');
     await Promise.resolve();
 
-    expect(statuses).toEqual(['offer', 'accept', 'timeout']);
-    expect(current.voip.rejectCall).toHaveBeenCalledWith('call-1');
+    expect(statuses).toEqual(['offer', 'accept', 'reject']);
+    expect(from).toEqual([
+      '5511999999999@s.whatsapp.net',
+      '5511999999999@s.whatsapp.net',
+      '5511999999999@s.whatsapp.net',
+    ]);
+    expect(current.lowlevel.sendNode).toHaveBeenCalledWith({
+      tag: 'call',
+      attrs: {
+        to: '123456789@lid',
+      },
+      content: [
+        {
+          tag: 'reject',
+          attrs: {
+            'call-id': 'call-1',
+            'call-creator': '123456789@lid',
+          },
+        },
+      ],
+    });
   });
 
   it('maps group events without duplicating the public provider contract', async () => {

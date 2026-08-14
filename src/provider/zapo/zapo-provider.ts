@@ -114,18 +114,25 @@ interface ZapoGroupEventLike {
 }
 
 
-interface ZapoVoipCallLike {
+interface ZapoCallEventLike {
+  type?: string | null;
   callId?: string | null;
-  peerJid?: string | null;
-  callCreator?: string | null;
-  callerPn?: string | null;
+  callCreatorJid?: string | null;
+  callerPnJid?: string | null;
   groupJid?: string | null;
-  mediaType?: string | null;
-  createdAt?: Date | null;
-  stateData?: {
-    state?: string | null;
-    endReason?: string | null;
-  } | null;
+  isVideo?: boolean | null;
+  callerPushName?: string | null;
+  timestampMs?: number | LongLike | null;
+}
+
+interface ZapoBinaryNodeLike {
+  tag: string;
+  attrs: Record<string, string>;
+  content?: ZapoBinaryNodeLike[];
+}
+
+interface ZapoLowLevelLike {
+  sendNode(node: ZapoBinaryNodeLike): Promise<void>;
 }
 
 interface ZapoGroupMetadataLike {
@@ -158,17 +165,6 @@ interface ZapoPresenceLike {
   sendChatstate(jid: string, value: { state: ZapoChatstateState }): Promise<void>;
 }
 
-interface ZapoVoipCoordinatorLike {
-  rejectCall(callId: string): Promise<void>;
-}
-
-interface ZapoVoipEventClient {
-  on(
-    event: 'voip_call_incoming' | 'voip_call_state' | 'voip_call_ended',
-    listener: (event: ZapoVoipCallLike) => void,
-  ): unknown;
-}
-
 export class ZapoProvider implements WhatsAppProvider {
   readonly #options: ZapoProviderOptions;
   readonly #events = new TypedEventEmitter<ProviderEvents>();
@@ -177,6 +173,7 @@ export class ZapoProvider implements WhatsAppProvider {
   readonly #messageKeyStore = new WeakMap<MessageKey, StoredZapoMessage>();
   readonly #deliveredMessageStore = new Set<string>();
   readonly #handledProtocolStore = new Set<string>();
+  readonly #callCreatorStore = new Map<string, string>();
   readonly #messageCacheSize: number;
   #client: WaClient | undefined;
   #intentionalClose = false;
@@ -526,9 +523,27 @@ export class ZapoProvider implements WhatsAppProvider {
     await presence.sendChatstate(chatId, { state: value });
   }
 
-  async rejectCall(callId: string, _from: string): Promise<void> {
-    const client = this.#requireClient() as unknown as { voip: ZapoVoipCoordinatorLike };
-    await client.voip.rejectCall(callId);
+  async rejectCall(callId: string, from: string): Promise<void> {
+    const client = this.#requireClient();
+    const creator = this.#callCreatorStore.get(callId) ?? from;
+    if (!creator) {
+      throw new WhaNextError('ARGUMENT_INVALID', 'Call creator is required to reject a call.');
+    }
+
+    const lowlevel = client.lowlevel as unknown as ZapoLowLevelLike;
+    await lowlevel.sendNode({
+      tag: 'call',
+      attrs: { to: creator },
+      content: [
+        {
+          tag: 'reject',
+          attrs: {
+            'call-id': callId,
+            'call-creator': creator,
+          },
+        },
+      ],
+    });
   }
 
   async #ensureClient(): Promise<WaClient> {
@@ -559,9 +574,6 @@ export class ZapoProvider implements WhatsAppProvider {
         messageSecret: 'sqlite',
       },
     });
-    const { voipPlugin } = await import('@zapo-js/voip');
-    const voip = voipPlugin({ logLevel: 'warn' });
-
     const client = new WaClient({
       store,
       sessionId: this.#options.sessionId ?? 'default',
@@ -574,7 +586,6 @@ export class ZapoProvider implements WhatsAppProvider {
         persistAllSecrets: true,
       },
       media: { processor: createMediaProcessor() },
-      plugins: [voip],
     }, new WhaNextZapoLogger(this.#logger));
 
     this.#client = client;
@@ -625,26 +636,8 @@ export class ZapoProvider implements WhatsAppProvider {
       this.#handleGroupEvent(event as unknown as ZapoGroupEventLike);
     });
 
-    const voipClient = client as unknown as ZapoVoipEventClient;
-
-    voipClient.on('voip_call_incoming', (event) => {
-      const call = this.#normalizeVoipCall(event, 'offer');
-      if (call) void this.#events.emit('call', call);
-    });
-
-    voipClient.on('voip_call_state', (event) => {
-      const state = event.stateData?.state;
-      if (state === 'incoming_ringing' || state === 'ended') return;
-
-      const call = this.#normalizeVoipCall(event);
-      if (call) void this.#events.emit('call', call);
-    });
-
-    voipClient.on('voip_call_ended', (event) => {
-      const call = this.#normalizeVoipCall(
-        event,
-        this.#callEndStatus(event.stateData?.endReason),
-      );
+    client.on('call', (event) => {
+      const call = this.#normalizeCall(event as unknown as ZapoCallEventLike);
       if (call) void this.#events.emit('call', call);
     });
 
@@ -1267,55 +1260,52 @@ export class ZapoProvider implements WhatsAppProvider {
   }
 
 
-  #normalizeVoipCall(
-    event: ZapoVoipCallLike,
-    forcedStatus?: CallStatus,
-  ): CallEvent | undefined {
+  #normalizeCall(event: ZapoCallEventLike): CallEvent | undefined {
     const id = event.callId;
-    const from = event.callerPn ?? event.peerJid ?? event.callCreator;
-    const chatId = event.groupJid ?? event.peerJid ?? from;
+    const creator = event.callCreatorJid ?? undefined;
+    const from = event.callerPnJid ?? creator;
+    const chatId = event.groupJid ?? from;
 
     if (!id || !from || !chatId) return undefined;
 
+    if (creator) {
+      this.#callCreatorStore.delete(id);
+      this.#callCreatorStore.set(id, creator);
+      while (this.#callCreatorStore.size > 256) {
+        const oldest = this.#callCreatorStore.keys().next().value as string | undefined;
+        if (!oldest) break;
+        this.#callCreatorStore.delete(oldest);
+      }
+    }
+
+    const timestampMs = toNumber(event.timestampMs);
     return {
       id,
       chatId,
       from,
-      status: forcedStatus ?? this.#callStatus(event.stateData?.state),
-      isVideo: event.mediaType === 'video',
+      status: this.#callStatus(event.type),
+      isVideo: event.isVideo === true,
       isGroup: Boolean(event.groupJid),
-      date: event.createdAt ?? new Date(),
+      date: timestampMs && timestampMs > 0 ? new Date(timestampMs) : new Date(),
     };
   }
 
   #callStatus(status: string | null | undefined): CallStatus {
     switch (status?.toLowerCase()) {
       case 'offer':
-      case 'initiating':
         return 'offer';
       case 'ringing':
-      case 'incoming_ringing':
         return 'ringing';
       case 'preaccept':
-      case 'connecting':
         return 'preaccept';
       case 'accept':
-      case 'accepted':
-      case 'active':
         return 'accept';
       case 'reject':
-      case 'rejected':
       case 'terminate':
-      case 'terminated':
-      case 'ended':
         return 'reject';
       default:
         return 'timeout';
     }
-  }
-
-  #callEndStatus(reason: string | null | undefined): CallStatus {
-    return reason?.toLowerCase() === 'timeout' ? 'timeout' : 'reject';
   }
 
   #groupAction(action: string | null | undefined): GroupParticipantAction | undefined {
@@ -1537,6 +1527,13 @@ class WhaNextZapoLogger implements ZapoLogger {
       ? { ...this.#context, ...context }
       : this.#context;
   }
+}
+
+function toNumber(value: number | LongLike | null | undefined): number | undefined {
+  if (typeof value === 'number') return value;
+  if (value?.toNumber) return value.toNumber();
+  if (typeof value?.low === 'number') return value.low;
+  return undefined;
 }
 
 function toSeconds(value: number | LongLike | null | undefined): number | undefined {

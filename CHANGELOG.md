@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.19.3
+### Corrigido
+- Carregamento lazy do plugin VoIP do Zapo para evitar importar o runtime WebRTC em consumidores e testes que não inicializam o provider.
+- Ajustes de tipagem dos testes com `exactOptionalPropertyTypes`.
+- Provider Zapo agora usa `@zapo-js/voip` como único caminho de chamadas: eventos `voip_*` e `client.voip.rejectCall()`, sem fallback silencioso.
+- `messageEdited` também reconhece edições criptografadas descriptografadas pelo Zapo em `message_addon`, além de `message_protocol`.
+- `messageDeleted` e `messageEdited` ignoram protocolo de backlog durante bootstrap quando `processOfflineMessages` está desativado.
+- Mensagens recebidas antes de `connection: open` deixam de ser publicadas como mensagens ao vivo; ainda entram no cache limitado para permitir recuperação posterior.
+- Eventos `message` duplicados no mesmo runtime são descartados antes de chegar aos consumidores, evitando downloads repetidos de mídia/ViewOnce.
+
+### Compatibilidade
+- Mudança corretiva e aditiva; a API pública de `CallEvent`, `messageDeleted` e `messageEdited` permanece inalterada.
+
 ## 0.19.2
 
 - Corrigido o download real de mídias citadas no provider Zapo: `downloadMedia()` agora entrega o `Proto.IMessage` bruto diretamente ao `downloadBytes()`, como suportado pela API do Zapo.

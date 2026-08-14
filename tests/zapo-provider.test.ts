@@ -627,6 +627,90 @@ describe('ZapoProvider', () => {
     );
   });
 
+  it('does not publish message events received before the live connection opens', async () => {
+    const provider = new ZapoProvider({
+      auth: './session',
+      browser: Browser.Windows,
+    });
+    const received: string[] = [];
+    provider.on('message', (message) => {
+      received.push(message.id);
+    });
+
+    await provider.connect();
+    const current = client();
+    current.emit('message', {
+      key: { id: 'bootstrap-old', remoteJid: '5511@s.whatsapp.net', fromMe: false },
+      message: { conversation: 'mensagem de sincronização' },
+      timestampSeconds: Math.floor(Date.now() / 1_000),
+    });
+    await Promise.resolve();
+
+    expect(received).toEqual([]);
+
+    current.emit('connection', { status: 'open', isNewLogin: false });
+    current.emit('message', {
+      key: { id: 'live-new', remoteJid: '5511@s.whatsapp.net', fromMe: false },
+      message: { conversation: 'mensagem ao vivo' },
+      timestampSeconds: Math.floor(Date.now() / 1_000),
+    });
+    await Promise.resolve();
+
+    expect(received).toEqual(['live-new']);
+  });
+
+  it('keeps ignored bootstrap messages cached for a later live revoke', async () => {
+    const provider = new ZapoProvider({
+      auth: './session',
+      browser: Browser.Windows,
+    });
+    const deleted: Array<{ id: string; text: string | undefined }> = [];
+    provider.on('messageDeleted', (event) => {
+      deleted.push({ id: event.key.id, text: event.message?.text });
+    });
+
+    await provider.connect();
+    const current = client();
+    current.emit('message', {
+      key: { id: 'bootstrap-target', remoteJid: '5511@s.whatsapp.net', fromMe: false },
+      message: { conversation: 'guardada sem publicar' },
+      timestampSeconds: Math.floor(Date.now() / 1_000) - 60,
+    });
+    current.emit('connection', { status: 'open', isNewLogin: false });
+    current.emit('message_protocol', {
+      key: { id: 'live-revoke', remoteJid: '5511@s.whatsapp.net', fromMe: false },
+      message: {},
+      timestampSeconds: Math.floor(Date.now() / 1_000),
+      protocolMessage: {
+        type: 0,
+        key: { id: 'bootstrap-target', remoteJid: '5511@s.whatsapp.net', fromMe: false },
+      },
+    });
+    await Promise.resolve();
+
+    expect(deleted).toEqual([{ id: 'bootstrap-target', text: 'guardada sem publicar' }]);
+  });
+
+  it('publishes each Zapo message id only once per provider runtime', async () => {
+    const { provider, client: current } = await connectedProvider();
+    const received: string[] = [];
+    provider.on('message', (message) => {
+      received.push(message.id);
+    });
+    const event = {
+      key: { id: 'same-id', remoteJid: '5511@s.whatsapp.net', fromMe: false },
+      message: { conversation: 'uma vez' },
+      timestampSeconds: Math.floor(Date.now() / 1_000),
+    };
+
+    current.emit('message', event);
+    current.emit('message', event);
+    current.emit('message', event);
+    await Promise.resolve();
+
+    expect(received).toEqual(['same-id']);
+  });
+
   it('ignores messages queued before the current connection by default', async () => {
     const { provider, client: current } = await connectedProvider();
     const received: string[] = [];
@@ -714,6 +798,44 @@ describe('ZapoProvider', () => {
 
     expect(edits).toEqual(['depois']);
     expect(deletes).toEqual(['target']);
+  });
+
+  it('translates decrypted secret edit addons into messageEdited', async () => {
+    const { provider, client: current } = await connectedProvider();
+    const edits: Array<{ previous: string | undefined; current: string | undefined }> = [];
+    provider.on('messageEdited', (event) => {
+      edits.push({
+        previous: event.previous?.text,
+        current: event.message.text,
+      });
+    });
+    const now = Math.floor(Date.now() / 1_000);
+
+    current.emit('message', {
+      key: { id: 'secret-target', remoteJid: '5511@s.whatsapp.net', fromMe: false },
+      message: { conversation: 'antes secreto' },
+      timestampSeconds: now,
+    });
+    current.emit('message_addon', {
+      key: { id: 'secret-edit-event', remoteJid: '5511@s.whatsapp.net', fromMe: false },
+      kind: 'message_edit',
+      targetMessageId: 'secret-target',
+      decrypted: { conversation: 'depois secreto' },
+      raw: {},
+    });
+    current.emit('message_addon', {
+      key: { id: 'secret-edit-event', remoteJid: '5511@s.whatsapp.net', fromMe: false },
+      kind: 'message_edit',
+      targetMessageId: 'secret-target',
+      decrypted: { conversation: 'depois secreto' },
+      raw: {},
+    });
+    await Promise.resolve();
+
+    expect(edits).toEqual([{
+      previous: 'antes secreto',
+      current: 'depois secreto',
+    }]);
   });
 
   it('caches outbound messages using the Zapo message_send event shape', async () => {

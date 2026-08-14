@@ -2,7 +2,6 @@ import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createMediaProcessor } from '@zapo-js/media-utils';
 import { createSqliteStore } from '@zapo-js/store-sqlite';
-import type { voipPlugin as ZapoVoipPluginFactory } from '@zapo-js/voip';
 import {
   WaClient,
   createStore,
@@ -92,6 +91,15 @@ interface ZapoProtocolEventLike extends StoredZapoMessage {
   } | null;
 }
 
+interface ZapoAddonEventLike {
+  key: ZapoMessageKeyLike;
+  kind?: string | null;
+  targetMessageId?: string | null;
+  decrypted?: unknown;
+  raw?: Proto.IMessage | null;
+  offline?: boolean | null;
+}
+
 interface ZapoGroupEventParticipantLike {
   jid?: string | null;
   lidJid?: string | null;
@@ -144,7 +152,6 @@ interface LongLike {
   low?: number;
 }
 
-type ZapoVoipPlugin = ReturnType<typeof ZapoVoipPluginFactory>;
 type ZapoChatstateState = 'composing' | 'recording' | 'paused';
 
 interface ZapoPresenceLike {
@@ -168,9 +175,10 @@ export class ZapoProvider implements WhatsAppProvider {
   readonly #logger: Logger;
   readonly #messageStore = new Map<string, StoredZapoMessage>();
   readonly #messageKeyStore = new WeakMap<MessageKey, StoredZapoMessage>();
+  readonly #deliveredMessageStore = new Set<string>();
+  readonly #handledProtocolStore = new Set<string>();
   readonly #messageCacheSize: number;
   #client: WaClient | undefined;
-  #voip: ZapoVoipCoordinatorLike | undefined;
   #intentionalClose = false;
   #reconnectAttempt = 0;
   #reconnectTimer: ReturnType<typeof setTimeout> | undefined;
@@ -519,17 +527,8 @@ export class ZapoProvider implements WhatsAppProvider {
   }
 
   async rejectCall(callId: string, _from: string): Promise<void> {
-    this.#requireClient();
-
-    if (!this.#voip) {
-      throw new WhaNextError(
-        'PROVIDER_ERROR',
-        'WhatsApp call support is unavailable because the Zapo VoIP plugin could not be loaded.',
-        { recoverable: true },
-      );
-    }
-
-    await this.#voip.rejectCall(callId);
+    const client = this.#requireClient() as unknown as { voip: ZapoVoipCoordinatorLike };
+    await client.voip.rejectCall(callId);
   }
 
   async #ensureClient(): Promise<WaClient> {
@@ -560,16 +559,8 @@ export class ZapoProvider implements WhatsAppProvider {
         messageSecret: 'sqlite',
       },
     });
-    const plugins: ZapoVoipPlugin[] = [];
-
-    try {
-      const { voipPlugin } = await import('@zapo-js/voip');
-      plugins.push(voipPlugin({ logLevel: 'warn' }));
-    } catch (error) {
-      this.#logger.warn('Zapo VoIP support is unavailable; call events and rejection are disabled.', {
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
+    const { voipPlugin } = await import('@zapo-js/voip');
+    const voip = voipPlugin({ logLevel: 'warn' });
 
     const client = new WaClient({
       store,
@@ -583,11 +574,10 @@ export class ZapoProvider implements WhatsAppProvider {
         persistAllSecrets: true,
       },
       media: { processor: createMediaProcessor() },
-      plugins,
+      plugins: [voip],
     }, new WhaNextZapoLogger(this.#logger));
 
     this.#client = client;
-    this.#voip = (client as unknown as { voip?: ZapoVoipCoordinatorLike }).voip;
     this.#bind(client);
     return client;
   }
@@ -627,33 +617,36 @@ export class ZapoProvider implements WhatsAppProvider {
       this.#handleProtocolEvent(event as unknown as ZapoProtocolEventLike);
     });
 
+    client.on('message_addon', (event) => {
+      this.#handleAddonEvent(event as unknown as ZapoAddonEventLike);
+    });
+
     client.on('group', (event) => {
       this.#handleGroupEvent(event as unknown as ZapoGroupEventLike);
     });
 
-    if (this.#voip) {
-      const voipClient = client as unknown as ZapoVoipEventClient;
+    const voipClient = client as unknown as ZapoVoipEventClient;
 
-      voipClient.on('voip_call_incoming', (event) => {
-        const call = this.#normalizeVoipCall(event, 'offer');
-        if (call) void this.#events.emit('call', call);
-      });
+    voipClient.on('voip_call_incoming', (event) => {
+      const call = this.#normalizeVoipCall(event, 'offer');
+      if (call) void this.#events.emit('call', call);
+    });
 
-      voipClient.on('voip_call_state', (event) => {
-        if (event.stateData?.state === 'ended') return;
+    voipClient.on('voip_call_state', (event) => {
+      const state = event.stateData?.state;
+      if (state === 'incoming_ringing' || state === 'ended') return;
 
-        const call = this.#normalizeVoipCall(event);
-        if (call && call.status !== 'offer') void this.#events.emit('call', call);
-      });
+      const call = this.#normalizeVoipCall(event);
+      if (call) void this.#events.emit('call', call);
+    });
 
-      voipClient.on('voip_call_ended', (event) => {
-        const call = this.#normalizeVoipCall(
-          event,
-          this.#callEndStatus(event.stateData?.endReason),
-        );
-        if (call) void this.#events.emit('call', call);
-      });
-    }
+    voipClient.on('voip_call_ended', (event) => {
+      const call = this.#normalizeVoipCall(
+        event,
+        this.#callEndStatus(event.stateData?.endReason),
+      );
+      if (call) void this.#events.emit('call', call);
+    });
 
     client.on('connection', (event) => {
       void this.#handleConnectionEvent(client, event);
@@ -663,15 +656,6 @@ export class ZapoProvider implements WhatsAppProvider {
   #handleMessage(event: WaIncomingMessageEvent): void {
     const stored = event as unknown as StoredZapoMessage;
 
-    if (this.#isOfflineMessage(stored)) {
-      this.#logger.debug('Ignored message queued before the current connection.', {
-        messageId: stored.key.id ?? undefined,
-        chatId: stored.key.remoteJid ?? undefined,
-        timestampSeconds: stored.timestampSeconds ?? undefined,
-      });
-      return;
-    }
-
     if (stored.key?.id && stored.message) this.#remember(stored);
 
     const quoted = extractQuotedZapoMessage(event);
@@ -679,9 +663,28 @@ export class ZapoProvider implements WhatsAppProvider {
       this.#remember(quoted as unknown as StoredZapoMessage);
     }
 
+    if (this.#isOfflineMessage(stored)) {
+      this.#logger.debug('Ignored message queued before the current live connection.', {
+        messageId: stored.key.id ?? undefined,
+        chatId: stored.key.remoteJid ?? undefined,
+        timestampSeconds: stored.timestampSeconds ?? undefined,
+      });
+      return;
+    }
+
+    const deliveryKey = this.#messageDeliveryKey(stored.key);
+    if (stored.key.id && this.#deliveredMessageStore.has(deliveryKey)) {
+      this.#logger.debug('Ignored duplicate Zapo message event.', {
+        messageId: stored.key.id,
+        chatId: stored.key.remoteJid ?? undefined,
+      });
+      return;
+    }
+
     const message = normalizeZapoMessage(event);
     if (!message) return;
 
+    if (stored.key.id) this.#rememberDeliveredMessage(deliveryKey);
     this.#messageKeyStore.set(message.keys, stored);
     if (message.quoted && quoted?.message) {
       this.#messageKeyStore.set(
@@ -693,7 +696,60 @@ export class ZapoProvider implements WhatsAppProvider {
     void this.#events.emit('message', message);
   }
 
+  #handleAddonEvent(event: ZapoAddonEventLike): void {
+    if (event.kind !== 'message_edit' || !event.targetMessageId) return;
+
+    const editedMessage = this.#addonEditedMessage(event.decrypted);
+    if (!editedMessage) return;
+
+    const target: ZapoMessageKeyLike = {
+      id: event.targetMessageId,
+      ...(event.key.remoteJid !== undefined ? { remoteJid: event.key.remoteJid } : {}),
+      ...(event.key.fromMe !== undefined ? { fromMe: event.key.fromMe } : {}),
+      ...(event.key.participant !== undefined ? { participant: event.key.participant } : {}),
+      ...(event.key.participantAlt !== undefined ? { participantAlt: event.key.participantAlt } : {}),
+    };
+
+    this.#handleProtocolEvent({
+      key: event.key,
+      ...(event.offline !== undefined ? { offline: event.offline } : {}),
+      protocolMessage: {
+        type: proto.Message.ProtocolMessage.Type.MESSAGE_EDIT,
+        key: target,
+        editedMessage,
+      },
+    });
+  }
+
+  #addonEditedMessage(value: unknown): Proto.IMessage | undefined {
+    if (!value || typeof value !== 'object') return undefined;
+
+    const record = value as Record<string, unknown>;
+    const protocol = record.protocolMessage;
+    if (protocol && typeof protocol === 'object') {
+      const edited = (protocol as Record<string, unknown>).editedMessage;
+      if (edited && typeof edited === 'object') return edited as Proto.IMessage;
+    }
+
+    const edited = record.editedMessage;
+    if (edited && typeof edited === 'object') return edited as Proto.IMessage;
+
+    const message = record.message;
+    if (message && typeof message === 'object') return message as Proto.IMessage;
+
+    return value as Proto.IMessage;
+  }
+
   #handleProtocolEvent(event: ZapoProtocolEventLike): void {
+    if (this.#isOfflineMessage(event)) {
+      this.#logger.debug('Ignored protocol event queued before the current live connection.', {
+        messageId: event.key.id ?? undefined,
+        chatId: event.key.remoteJid ?? undefined,
+        timestampSeconds: event.timestampSeconds ?? undefined,
+      });
+      return;
+    }
+
     const protocol = event.protocolMessage
       ?? (event.message?.protocolMessage as ZapoProtocolEventLike['protocolMessage']);
     if (!protocol) return;
@@ -715,8 +771,18 @@ export class ZapoProvider implements WhatsAppProvider {
 
     const stored = this.#findStoredMessage(target);
     const type = protocol?.type;
+    const mutationKey = this.#protocolDeliveryKey(event, target, type);
+
+    if (mutationKey && this.#handledProtocolStore.has(mutationKey)) {
+      this.#logger.debug('Ignored duplicate Zapo protocol event.', {
+        messageId: event.key.id ?? undefined,
+        targetMessageId: target.id ?? undefined,
+      });
+      return;
+    }
 
     if (type === proto.Message.ProtocolMessage.Type.REVOKE) {
+      if (mutationKey) this.#rememberHandledProtocol(mutationKey);
       const previous = stored ? normalizeZapoMessage(stored) : undefined;
       const deletedByMe = event.key.fromMe === true;
       const deletedById = event.key.participant
@@ -756,6 +822,7 @@ export class ZapoProvider implements WhatsAppProvider {
     if (!message) return;
 
     const previous = stored ? normalizeZapoMessage(stored) : undefined;
+    if (mutationKey) this.#rememberHandledProtocol(mutationKey);
     this.#remember(edited);
     const editedByMe = event.key.fromMe === true;
     const editedById = event.key.participant
@@ -1306,11 +1373,46 @@ export class ZapoProvider implements WhatsAppProvider {
     return `${key.remoteJid ?? ''}:${key.id ?? ''}:${key.participant ?? key.participantAlt ?? ''}`;
   }
 
+  #messageDeliveryKey(key: ZapoMessageKeyLike): string {
+    return `${key.remoteJid ?? ''}:${key.id ?? ''}`;
+  }
+
+  #protocolDeliveryKey(
+    event: ZapoProtocolEventLike,
+    target: ZapoMessageKeyLike,
+    type: number | null | undefined,
+  ): string | undefined {
+    if (type == null || !event.key.id || !target.id) return undefined;
+    return `${type}:${event.key.remoteJid ?? target.remoteJid ?? ''}:${event.key.id}:${target.id}`;
+  }
+
+  #rememberHandledProtocol(key: string): void {
+    this.#handledProtocolStore.delete(key);
+    this.#handledProtocolStore.add(key);
+
+    while (this.#handledProtocolStore.size > this.#messageCacheSize) {
+      const oldest = this.#handledProtocolStore.values().next().value as string | undefined;
+      if (oldest) this.#handledProtocolStore.delete(oldest);
+    }
+  }
+
+  #rememberDeliveredMessage(key: string): void {
+    this.#deliveredMessageStore.delete(key);
+    this.#deliveredMessageStore.add(key);
+
+    while (this.#deliveredMessageStore.size > this.#messageCacheSize) {
+      const oldest = this.#deliveredMessageStore.values().next().value as string | undefined;
+      if (oldest) this.#deliveredMessageStore.delete(oldest);
+    }
+  }
+
   #isOfflineMessage(message: StoredZapoMessage): boolean {
     if (this.#options.processOfflineMessages === true) return false;
     if (message.offline === true) return true;
-    if (!this.#connectedAtSeconds || message.timestampSeconds == null) return false;
 
+    if (!this.#connected) return true;
+
+    if (!this.#connectedAtSeconds || message.timestampSeconds == null) return false;
     const timestamp = toSeconds(message.timestampSeconds);
     if (timestamp === undefined) return false;
 

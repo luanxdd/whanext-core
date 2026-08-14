@@ -850,8 +850,12 @@ describe('ZapoProvider', () => {
     const { provider, client: current } = await connectedProvider();
     const edits: string[] = [];
     const deletes: string[] = [];
-    provider.on('messageEdited', (event) => edits.push(event.message.text ?? ''));
-    provider.on('messageDeleted', (event) => deletes.push(event.key.id));
+    provider.on('messageEdited', (event) => {
+      edits.push(event.message.text ?? '');
+    });
+    provider.on('messageDeleted', (event) => {
+      deletes.push(event.key.id);
+    });
     const now = Math.floor(Date.now() / 1_000);
 
     current.emit('message', {

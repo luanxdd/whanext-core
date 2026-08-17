@@ -16,7 +16,7 @@ const { mocks, MockClient } = vi.hoisted(() => {
     storeOptions: [] as unknown[],
     sqliteOptions: [] as unknown[],
     stores: [] as any[],
-    nextAuthEvent: 'pairing' as 'pairing' | 'qr',
+    nextAuthEvent: 'pairing' as 'pairing' | 'qr' | 'none',
   };
 
   class MockClient {
@@ -90,7 +90,7 @@ const { mocks, MockClient } = vi.hoisted(() => {
     connect = vi.fn(async () => {
       if (mocks.nextAuthEvent === 'qr') {
         this.emit('auth_qr', { qr: 'mock-qr', ttlMs: 60_000 });
-      } else {
+      } else if (mocks.nextAuthEvent === 'pairing') {
         this.emit('auth_pairing_required', { forceManual: true });
       }
       await new Promise<void>(() => undefined);
@@ -276,6 +276,22 @@ describe('ZapoProvider', () => {
 
     expect(code).toBe('12345678');
     expect(client().auth.requestPairingCode).toHaveBeenCalledWith('5531999999999');
+  });
+
+  it('does not wait for a pairing challenge when a stored session reconnects', async () => {
+    mocks.nextAuthEvent = 'none';
+    const provider = new ZapoProvider({ auth: './session', browser: Browser.Windows });
+
+    await provider.connect();
+    const current = client();
+    const codePromise = provider.requestPairingCode('+55 (31) 99999-9999');
+
+    current.credentials.meJid = '5531999999999:23@s.whatsapp.net';
+    current.emit('connection', { status: 'open', isNewLogin: false });
+    await flushAsync();
+
+    await expect(codePromise).resolves.toBe('');
+    expect(current.auth.requestPairingCode).not.toHaveBeenCalled();
   });
 
   it('keeps public account identities from Zapo credentials', async () => {

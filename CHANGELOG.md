@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.19.10
+
+- Fixed restored sessions incorrectly waiting for a pairing challenge after the WhatsApp connection was already open.
+- Pairing-code requests now stop immediately when an existing authenticated session reconnects.
+
 ## 0.19.9
 
 - Fixed live `message_addon` edits being discarded when Zapo reports the parent message timestamp instead of the mutation timestamp.

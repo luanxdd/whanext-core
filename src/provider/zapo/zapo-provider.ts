@@ -333,7 +333,7 @@ export class ZapoProvider implements WhatsAppProvider {
 
     const client = await this.#ensureClient();
 
-    if (client.getCredentials()?.meJid) {
+    if (client.getCredentials()?.meJid || this.#connected) {
       return '';
     }
 
@@ -348,6 +348,10 @@ export class ZapoProvider implements WhatsAppProvider {
           60_000,
           'The WhatsApp pairing challenge was not received in time.',
         );
+      }
+
+      if (!this.#pairingRequired || this.#connected || client.getCredentials()?.meJid) {
+        return '';
       }
 
       return await client.auth.requestPairingCode(normalized);
@@ -1107,6 +1111,8 @@ export class ZapoProvider implements WhatsAppProvider {
     if (event.status === 'open') {
       this.#connectPromise = undefined;
       this.#connected = true;
+      this.#resolvePairingReady?.();
+      this.#resolvePairingReady = undefined;
       this.#connectedAtSeconds = Math.floor(Date.now() / 1_000);
       this.#reconnectAttempt = 0;
       this.#closedNotified = false;

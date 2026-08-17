@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.19.9
+
+- Fixed live `message_addon` edits being discarded when Zapo reports the parent message timestamp instead of the mutation timestamp.
+- Serialized decrypted edit addons through the same protocol-mutation queue used by `message_protocol`, preserving edit/revoke ordering.
+- Offline-resume edit addons remain ignored by default unless `processOfflineMessages` is enabled.
+
 ## 0.19.8
 
 ### Fixed

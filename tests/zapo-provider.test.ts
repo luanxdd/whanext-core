@@ -1005,6 +1005,55 @@ describe('ZapoProvider', () => {
     }]);
   });
 
+  it('treats a live edit addon as live even when its parent timestamp predates the connection', async () => {
+    const { provider, client: current } = await connectedProvider();
+    const edits: Array<{ previous?: string; current?: string }> = [];
+    provider.on('messageEdited', (event) => {
+      edits.push({
+        ...(event.previous?.text !== undefined ? { previous: event.previous.text } : {}),
+        ...(event.message.text !== undefined ? { current: event.message.text } : {}),
+      });
+    });
+    const oldTimestamp = Math.floor(Date.now() / 1_000) - 120;
+
+    current.emit('message', {
+      key: { id: 'live-addon-target', remoteJid: '5511@s.whatsapp.net', fromMe: false },
+      message: { conversation: 'antes ao vivo' },
+      timestampSeconds: Math.floor(Date.now() / 1_000),
+    });
+    current.emit('message_addon', {
+      key: { id: 'live-addon-edit', remoteJid: '5511@s.whatsapp.net', fromMe: false },
+      kind: 'message_edit',
+      targetMessageId: 'live-addon-target',
+      decrypted: { conversation: 'depois ao vivo' },
+      timestampSeconds: oldTimestamp,
+      offline: false,
+    });
+    await flushAsync();
+
+    expect(edits).toEqual([{ previous: 'antes ao vivo', current: 'depois ao vivo' }]);
+  });
+
+  it('keeps offline-resume edit addons ignored by default', async () => {
+    const { provider, client: current } = await connectedProvider();
+    const edits: string[] = [];
+    provider.on('messageEdited', (event) => {
+      edits.push(event.message.text ?? '');
+    });
+
+    current.emit('message_addon', {
+      key: { id: 'offline-addon-edit', remoteJid: '5511@s.whatsapp.net', fromMe: false },
+      kind: 'message_edit',
+      targetMessageId: 'offline-addon-target',
+      decrypted: { conversation: 'edição antiga' },
+      timestampSeconds: Math.floor(Date.now() / 1_000) - 120,
+      offline: true,
+    });
+    await flushAsync();
+
+    expect(edits).toEqual([]);
+  });
+
   it('caches outbound messages using the Zapo message_send event shape', async () => {
     const { provider, client: current } = await connectedProvider();
 

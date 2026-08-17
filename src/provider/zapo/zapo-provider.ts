@@ -829,9 +829,22 @@ export class ZapoProvider implements WhatsAppProvider {
           : {}),
     };
 
-    void this.#handleProtocolEvent({
+    if (event.offline === true && this.#options.processOfflineMessages !== true) {
+      this.#logger.debug('Ignored offline Zapo edit addon from before the current live connection.', {
+        messageId: event.key.id ?? undefined,
+        targetMessageId,
+        chatId: target.remoteJid ?? event.key.remoteJid ?? undefined,
+      });
+      return;
+    }
+
+    const mutationTimestampSeconds = toSeconds(protocol?.timestampMs)
+      ?? (event.offline === true ? toSeconds(event.timestampSeconds) : undefined)
+      ?? Math.floor(Date.now() / 1_000);
+
+    this.#enqueueProtocolEvent({
       key: event.key,
-      ...(event.timestampSeconds !== undefined ? { timestampSeconds: event.timestampSeconds } : {}),
+      timestampSeconds: mutationTimestampSeconds,
       protocolMessage: {
         type: proto.Message.ProtocolMessage.Type.MESSAGE_EDIT,
         key: target,

@@ -9,6 +9,7 @@ export type WhaNextErrorCode =
   | 'BOT_NOT_ADMIN'
   | 'MESSAGE_NOT_FOUND'
   | 'MEDIA_NOT_AVAILABLE'
+  | 'MESSAGE_REACHOUT_LOCKED'
   | 'MUTE_DISABLED'
   | 'STORAGE_ERROR'
   | 'ARGUMENT_MISSING'
@@ -53,8 +54,49 @@ export function toWhaNextError(
   }
 
   const message = error instanceof Error ? error.message : 'An unknown error occurred.';
+
+  if (isReachoutTimelockError(error)) {
+    return new WhaNextError(
+      'MESSAGE_REACHOUT_LOCKED',
+      'WhatsApp rejected the outgoing message (ack 463: reach-out time-lock).',
+      {
+        cause: error,
+        context: {
+          ...(context ?? {}),
+          ackCode: 463,
+        },
+        recoverable: false,
+      },
+    );
+  }
+
   return new WhaNextError('UNKNOWN_ERROR', message, {
     cause: error,
     ...(context ? { context } : {}),
   });
+}
+
+function isReachoutTimelockError(error: unknown): boolean {
+  const seen = new Set<unknown>();
+  let current: unknown = error;
+
+  for (let depth = 0; depth < 8 && current !== undefined && current !== null; depth += 1) {
+    if (seen.has(current)) return false;
+    seen.add(current);
+
+    const message = current instanceof Error
+      ? current.message
+      : typeof current === 'string'
+        ? current
+        : undefined;
+
+    if (message && /negative publish ack:.*\berror=463\b/i.test(message)) {
+      return true;
+    }
+
+    if (typeof current !== 'object') return false;
+    current = Reflect.get(current, 'cause');
+  }
+
+  return false;
 }

@@ -212,7 +212,7 @@ beforeEach(() => {
 });
 
 describe('ZapoProvider', () => {
-  it('creates a persistent SQLite Zapo store and disables history sync', async () => {
+  it('creates a persistent SQLite Zapo store with mailbox and full history sync', async () => {
     const provider = new ZapoProvider({
       auth: './accounts/main',
       browser: Browser.MacOS,
@@ -235,9 +235,9 @@ describe('ZapoProvider', () => {
         senderKey: 'sqlite',
         appState: 'sqlite',
         privacyToken: 'sqlite',
-        messages: 'none',
-        threads: 'none',
-        contacts: 'none',
+        messages: 'sqlite',
+        threads: 'sqlite',
+        contacts: 'sqlite',
       },
       cacheProviders: {
         messageSecret: 'sqlite',
@@ -248,7 +248,7 @@ describe('ZapoProvider', () => {
       deviceBrowser: 'safari',
       deviceOsDisplayName: 'macOS',
       markOnlineOnConnect: false,
-      history: { enabled: false },
+      history: { enabled: true, requireFullSync: true },
       addons: {
         autoDecrypt: true,
         persistAllSecrets: true,

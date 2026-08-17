@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.19.8
+
+### Fixed
+- The Zapo mailbox (`messages`, `threads`, and `contacts`) is now persisted in the shared SQLite store and full history sync is enabled. This lets Zapo retain parent message secrets required to decrypt `secretEncryptedMessage` edit addons after restart/offline resume.
+- History sync now hydrates the trusted-contact/privacy-token state used by Zapo when preparing outgoing messages, including history-derived token metadata and NCT salt that can be required for `tctoken`/`cstoken` generation. Historical/bootstrap messages are still filtered by WhaNext and do not become live command events unless `processOfflineMessages` is explicitly enabled.
+- WhatsApp negative publish ACK `463` is normalized as `MESSAGE_REACHOUT_LOCKED` with `ackCode: 463` instead of surfacing as `UNKNOWN_ERROR`, allowing consumers to avoid retry/error-reply loops while the account is reach-out time-locked.
+
+### Compatibility
+- Public message/edit/delete event shapes are unchanged.
+- Existing shared multi-account stores are reused in place; the mailbox domains are created inside the same `state.sqlite` and remain isolated by `sessionId`.
+- The first connection after this update may perform a larger history sync because mailbox persistence is now enabled deliberately.
+
 ## 0.19.7
 
 ### Fixed

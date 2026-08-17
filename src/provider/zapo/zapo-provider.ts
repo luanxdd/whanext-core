@@ -653,7 +653,7 @@ export class ZapoProvider implements WhatsAppProvider {
       markOnlineOnConnect: false,
       deviceBrowser: this.#deviceBrowser(),
       deviceOsDisplayName: this.#deviceOsDisplayName(),
-      history: { enabled: false },
+      history: { enabled: true, requireFullSync: true },
       addons: {
         autoDecrypt: true,
         persistAllSecrets: true,
@@ -2045,9 +2045,9 @@ function createZapoStoreEntry(storePath: string): SharedZapoStoreEntry {
       senderKey: 'sqlite',
       appState: 'sqlite',
       privacyToken: 'sqlite',
-      messages: 'none',
-      threads: 'none',
-      contacts: 'none',
+      messages: 'sqlite',
+      threads: 'sqlite',
+      contacts: 'sqlite',
     },
     cacheProviders: {
       messageSecret: 'sqlite',

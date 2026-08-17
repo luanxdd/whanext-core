@@ -8,7 +8,7 @@ Substituir o Baileys pelo Zapo no provider padrão sem alterar o contrato públi
 
 `ZapoProvider` implementa `WhatsAppProvider` e concentra autenticação, eventos, normalização, envio, mídia, grupos, presença e chamadas. Tipos do Zapo permanecem internos ao provider.
 
-A autenticação usa SQLite em `<auth>/state.sqlite`. Em multi-account, cada conta mantém diretório e `sessionId` independentes.
+A autenticação usa SQLite. Desde a v0.19.6, contas irmãs em multi-account compartilham `<authRoot>/state.sqlite` e permanecem isoladas por `sessionId`; caminhos customizados de conta única continuam usando `<auth>/state.sqlite`.
 
 ## Compatibilidade pública
 
@@ -38,7 +38,7 @@ Por padrão, eventos marcados pelo Zapo como `offline` não são encaminhados ao
 
 ## Store
 
-Domínios de autenticação e Signal são persistidos em SQLite. O archive de mensagens, threads e contatos permanece desligado. `messageSecret` também é persistido para manter o suporte do Zapo a addons criptografados após reinícios. Edições e revogações públicas do WhaNext são traduzidas do evento `message_protocol`.
+Domínios de autenticação e Signal são persistidos no SQLite do Zapo. O archive completo de mensagens, threads e contatos permanece desligado. `messageSecret` também é persistido para manter o suporte do Zapo a addons criptografados após reinícios. Desde a v0.19.6, o WhaNext mantém em `whanext-messages.sqlite` apenas um snapshot compacto e limitado das mensagens recentes necessário para recuperar o conteúdo anterior de `messageEdited` e `messageDeleted`; as mutações públicas continuam sendo traduzidas do evento `message_protocol`.
 
 ## Sessões anteriores
 

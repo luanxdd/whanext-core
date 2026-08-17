@@ -15,6 +15,7 @@ const { mocks, MockClient } = vi.hoisted(() => {
     clients: [] as any[],
     storeOptions: [] as unknown[],
     sqliteOptions: [] as unknown[],
+    stores: [] as any[],
     nextAuthEvent: 'pairing' as 'pairing' | 'qr',
   };
 
@@ -113,10 +114,46 @@ vi.mock('zapo-js', () => ({
   WaClient: MockClient,
   createStore: vi.fn((options: unknown) => {
     mocks.storeOptions.push(options);
-    return { options };
+    const records = new Map<string, Map<string, any>>();
+    const sessions = new Map<string, any>();
+    const store = {
+      options,
+      session: vi.fn((sessionId: string) => {
+        const existing = sessions.get(sessionId);
+        if (existing) return existing;
+        const messages = records.get(sessionId) ?? new Map<string, any>();
+        records.set(sessionId, messages);
+        const session = {
+          messages: {
+            upsert: vi.fn(async (record: any) => {
+              messages.set(record.id, record);
+            }),
+            getById: vi.fn(async (id: string) => messages.get(id)),
+            deleteById: vi.fn(async (id: string) => {
+              messages.delete(id);
+            }),
+            clear: vi.fn(async () => messages.clear()),
+            listByThread: vi.fn(async () => []),
+            upsertBatch: vi.fn(async (items: any[]) => {
+              for (const record of items) messages.set(record.id, record);
+            }),
+          },
+          destroy: vi.fn(async () => undefined),
+        };
+        sessions.set(sessionId, session);
+        return session;
+      }),
+      destroy: vi.fn(async () => undefined),
+    };
+    mocks.stores.push(store);
+    return store;
   }),
   proto: {
     Message: {
+      encode: vi.fn((message: unknown) => ({
+        finish: () => new TextEncoder().encode(JSON.stringify(message)),
+      })),
+      decode: vi.fn((bytes: Uint8Array) => JSON.parse(new TextDecoder().decode(bytes))),
       ProtocolMessage: {
         Type: {
           REVOKE: 0,
@@ -157,14 +194,19 @@ async function connectedProvider(options: ConstructorParameters<typeof ZapoProvi
   await provider.connect();
   const current = client();
   current.emit('connection', { status: 'open', isNewLogin: false });
-  await Promise.resolve();
+  await flushAsync();
   return { provider, client: current };
+}
+
+async function flushAsync(): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
 beforeEach(() => {
   mocks.clients.length = 0;
   mocks.storeOptions.length = 0;
   mocks.sqliteOptions.length = 0;
+  mocks.stores.length = 0;
   mocks.nextAuthEvent = 'pairing';
   vi.clearAllMocks();
 });
@@ -179,8 +221,8 @@ describe('ZapoProvider', () => {
 
     await provider.connect();
 
-    expect(mocks.sqliteOptions[0]).toEqual({
-      path: 'accounts/main/state.sqlite',
+    expect(mocks.sqliteOptions[0]).toMatchObject({
+      path: expect.stringMatching(/accounts[\\/]state\.sqlite$/),
       driver: 'auto',
     });
     expect(mocks.storeOptions[0]).toMatchObject({
@@ -212,6 +254,7 @@ describe('ZapoProvider', () => {
         persistAllSecrets: true,
       },
     });
+    await provider.disconnect();
   });
 
   it('requests a pairing code only after the pairing challenge', async () => {
@@ -462,7 +505,7 @@ describe('ZapoProvider', () => {
       },
       timestampSeconds: now,
     });
-    await Promise.resolve();
+    await flushAsync();
 
     expect(received[0]?.interactive).toEqual({ kind: 'list', id: '&open', title: 'Abrir grupo' });
     expect(received[1]?.interactive).toEqual({ kind: 'list', id: '&close', title: 'Fechar grupo' });
@@ -486,7 +529,7 @@ describe('ZapoProvider', () => {
       },
       timestampSeconds: now,
     });
-    await Promise.resolve();
+    await flushAsync();
 
     expect(received[0]?.contentKind).toBe('poll');
     expect(received[0]?.text).toBe('Qual opção?');
@@ -554,7 +597,7 @@ describe('ZapoProvider', () => {
       },
       timestampSeconds: now,
     });
-    await Promise.resolve();
+    await flushAsync();
 
     const media = await provider.downloadMedia(received[0].quoted.key);
 
@@ -601,7 +644,7 @@ describe('ZapoProvider', () => {
       },
       timestampSeconds: now,
     });
-    await Promise.resolve();
+    await flushAsync();
 
     expect(received[0]?.quoted).toMatchObject({
       hasMedia: true,
@@ -640,7 +683,7 @@ describe('ZapoProvider', () => {
       message: { conversation: 'mensagem de sincronização' },
       timestampSeconds: Math.floor(Date.now() / 1_000),
     });
-    await Promise.resolve();
+    await flushAsync();
 
     expect(received).toEqual([]);
 
@@ -650,7 +693,7 @@ describe('ZapoProvider', () => {
       message: { conversation: 'mensagem ao vivo' },
       timestampSeconds: Math.floor(Date.now() / 1_000),
     });
-    await Promise.resolve();
+    await flushAsync();
 
     expect(received).toEqual(['live-new']);
   });
@@ -682,7 +725,7 @@ describe('ZapoProvider', () => {
         key: { id: 'bootstrap-target', remoteJid: '5511@s.whatsapp.net', fromMe: false },
       },
     });
-    await Promise.resolve();
+    await flushAsync();
 
     expect(deleted).toEqual([{ id: 'bootstrap-target', text: 'guardada sem publicar' }]);
   });
@@ -702,7 +745,7 @@ describe('ZapoProvider', () => {
     current.emit('message', event);
     current.emit('message', event);
     current.emit('message', event);
-    await Promise.resolve();
+    await flushAsync();
 
     expect(received).toEqual(['same-id']);
   });
@@ -727,7 +770,7 @@ describe('ZapoProvider', () => {
       timestampSeconds: now,
       offline: false,
     });
-    await Promise.resolve();
+    await flushAsync();
 
     expect(received).toEqual(['new']);
   });
@@ -749,7 +792,7 @@ describe('ZapoProvider', () => {
       timestampSeconds: Math.floor(Date.now() / 1_000) - 120,
       offline: true,
     });
-    await Promise.resolve();
+    await flushAsync();
 
     expect(received).toEqual(['old']);
   });
@@ -790,7 +833,7 @@ describe('ZapoProvider', () => {
         key: { id: 'target', fromMe: false },
       },
     });
-    await Promise.resolve();
+    await flushAsync();
 
     expect(edits).toEqual(['depois']);
     expect(deletes).toEqual(['target']);
@@ -840,7 +883,7 @@ describe('ZapoProvider', () => {
         key: { id: 'live-target', fromMe: false },
       },
     });
-    await Promise.resolve();
+    await flushAsync();
 
     expect(edits).toEqual([{ previous: 'original', current: 'editada' }]);
     expect(deletes).toEqual([{ id: 'live-target', text: 'editada' }]);
@@ -886,7 +929,7 @@ describe('ZapoProvider', () => {
       },
       timestampSeconds: now,
     });
-    await Promise.resolve();
+    await flushAsync();
 
     expect(edits).toEqual(['depois']);
     expect(deletes).toEqual(['wrapped-target']);
@@ -919,7 +962,7 @@ describe('ZapoProvider', () => {
       },
       timestampSeconds: now,
     });
-    await Promise.resolve();
+    await flushAsync();
 
     expect(edits).toEqual([{ previous: 'antes', current: 'depois' }]);
   });
@@ -954,7 +997,7 @@ describe('ZapoProvider', () => {
       decrypted: { conversation: 'depois secreto' },
       raw: {},
     });
-    await Promise.resolve();
+    await flushAsync();
 
     expect(edits).toEqual([{
       previous: 'antes secreto',
@@ -986,6 +1029,179 @@ describe('ZapoProvider', () => {
       { conversation: 'mensagem enviada' },
       { forward: true },
     );
+  });
+
+  it('restores edit and delete targets from the persistent message archive after RAM eviction', async () => {
+    const { provider, client: current } = await connectedProvider({
+      auth: './session-archive',
+      browser: Browser.Windows,
+      messageCacheSize: 1,
+    });
+    const edits: Array<{ previous?: string; current?: string }> = [];
+    const deletes: Array<{ id: string; text?: string }> = [];
+    provider.on('messageEdited', (event) => {
+      edits.push({
+        ...(event.previous?.text ? { previous: event.previous.text } : {}),
+        ...(event.message.text ? { current: event.message.text } : {}),
+      });
+    });
+    provider.on('messageDeleted', (event) => {
+      deletes.push({
+        id: event.key.id,
+        ...(event.message?.text ? { text: event.message.text } : {}),
+      });
+    });
+    const now = Math.floor(Date.now() / 1_000);
+
+    current.emit('message', {
+      key: { id: 'persisted-target', remoteJid: '5511@s.whatsapp.net', fromMe: false },
+      message: { conversation: 'original persistida' },
+      timestampSeconds: now,
+    });
+    await flushAsync();
+    current.emit('message', {
+      key: { id: 'cache-evictor', remoteJid: '5511@s.whatsapp.net', fromMe: false },
+      message: { conversation: 'outra mensagem' },
+      timestampSeconds: now,
+    });
+    await flushAsync();
+
+    current.emit('message_protocol', {
+      key: { id: 'persisted-edit', remoteJid: '5511@s.whatsapp.net', fromMe: false },
+      timestampSeconds: now,
+      protocolMessage: {
+        type: 14,
+        key: { id: 'persisted-target', fromMe: false },
+        editedMessage: { conversation: 'editada persistida' },
+      },
+    });
+    await flushAsync();
+    current.emit('message', {
+      key: { id: 'second-evictor', remoteJid: '5511@s.whatsapp.net', fromMe: false },
+      message: { conversation: 'mais uma' },
+      timestampSeconds: now,
+    });
+    await flushAsync();
+    current.emit('message_protocol', {
+      key: { id: 'persisted-delete', remoteJid: '5511@s.whatsapp.net', fromMe: false },
+      timestampSeconds: now,
+      protocolMessage: {
+        type: 0,
+        key: { id: 'persisted-target', fromMe: false },
+      },
+    });
+    await flushAsync();
+
+    expect(edits).toEqual([{ previous: 'original persistida', current: 'editada persistida' }]);
+    expect(deletes).toEqual([{ id: 'persisted-target', text: 'editada persistida' }]);
+    await provider.disconnect();
+  });
+
+  it('stops a passkey-gated login immediately when no signer is configured', async () => {
+    const provider = new ZapoProvider({ auth: './session-passkey', browser: Browser.Windows });
+    const closed: any[] = [];
+    provider.on('connection', (event) => {
+      if (event.state === 'closed') closed.push(event);
+    });
+
+    await provider.connect();
+    const current = client();
+    current.emit('auth_passkey_required', { hasSigner: false });
+    await flushAsync();
+
+    expect(closed).toHaveLength(1);
+    expect(closed[0].error).toMatchObject({ code: 'AUTH_PASSKEY_REQUIRED' });
+    expect(current.disconnect).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not retry fatal 401 authentication failures', async () => {
+    const { provider, client: current } = await connectedProvider({
+      auth: './session-401',
+      browser: Browser.Windows,
+      reconnect: { enabled: true, maxAttempts: 10, initialDelayMs: 1, maxDelayMs: 2 },
+    });
+    const states: string[] = [];
+    const closedErrors: any[] = [];
+    provider.on('connection', (event) => {
+      states.push(event.state);
+      if (event.state === 'closed') closedErrors.push(event.error);
+    });
+
+    current.emit('connection', {
+      status: 'close',
+      reason: 'failure_not_authorized',
+      code: 401,
+      isLogout: false,
+    });
+    await flushAsync();
+
+    expect(states).toEqual(['closed']);
+    expect(closedErrors[0]).toMatchObject({ code: 'AUTH_EXPIRED' });
+    expect(mocks.stores.at(-1)?.destroy).toHaveBeenCalledTimes(1);
+  });
+
+  it('extracts a fatal 401 from the nested Boom error shape used by the WhatsApp transport', async () => {
+    const { provider, client: current } = await connectedProvider({
+      auth: './session-nested-401',
+      browser: Browser.Windows,
+      reconnect: { enabled: true, maxAttempts: 10, initialDelayMs: 1, maxDelayMs: 2 },
+    });
+    const states: string[] = [];
+    const closedErrors: any[] = [];
+    provider.on('connection', (event) => {
+      states.push(event.state);
+      if (event.state === 'closed') closedErrors.push(event.error);
+    });
+
+    const cause = Object.assign(new Error('Connection Failure'), {
+      data: { reason: '401', location: 'frc' },
+      isBoom: true,
+      isServer: false,
+      output: { statusCode: 401, payload: {}, headers: {} },
+    });
+    current.emit('connection', {
+      status: 'close',
+      reason: { recoverable: true, cause },
+      isLogout: false,
+    });
+    await flushAsync();
+
+    expect(states).toEqual(['closed']);
+    expect(closedErrors[0]).toMatchObject({
+      code: 'AUTH_EXPIRED',
+      recoverable: false,
+      context: { statusCode: 401 },
+    });
+    expect(mocks.stores.at(-1)?.destroy).toHaveBeenCalledTimes(1);
+  });
+
+  it('shares one Zapo store across sibling account sessions and releases it after the last disconnect', async () => {
+    const first = new ZapoProvider({
+      auth: './multi/one',
+      browser: Browser.Windows,
+      sessionId: 'one',
+    });
+    const second = new ZapoProvider({
+      auth: './multi/two',
+      browser: Browser.Windows,
+      sessionId: 'two',
+    });
+
+    await first.connect();
+    const firstClient = client();
+    await second.connect();
+    const secondClient = client();
+
+    expect(mocks.storeOptions).toHaveLength(1);
+    expect((firstClient.options as any).store).toBe((secondClient.options as any).store);
+    expect((firstClient.options as any).sessionId).toBe('one');
+    expect((secondClient.options as any).sessionId).toBe('two');
+
+    const sharedStore = mocks.stores[0];
+    await first.disconnect();
+    expect(sharedStore.destroy).not.toHaveBeenCalled();
+    await second.disconnect();
+    expect(sharedStore.destroy).toHaveBeenCalledTimes(1);
   });
 
   it('maps group operations and participant updates', async () => {
@@ -1052,7 +1268,7 @@ describe('ZapoProvider', () => {
     });
 
     await provider.rejectCall('call-1', '5511999999999@s.whatsapp.net');
-    await Promise.resolve();
+    await flushAsync();
 
     expect(statuses).toEqual(['offer', 'accept', 'reject']);
     expect(from).toEqual([
@@ -1098,7 +1314,7 @@ describe('ZapoProvider', () => {
       }],
       authorJid: '200@lid',
     });
-    await Promise.resolve();
+    await flushAsync();
 
     expect(groupChanges).toEqual(['123@g.us']);
     expect(participantChanges).toEqual(['promote:100@lid']);

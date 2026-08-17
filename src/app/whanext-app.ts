@@ -186,14 +186,16 @@ export class WhaNextApp {
         if (update.state === 'connected') resolve();
         if (update.state === 'closed') {
           reject(
-            new WhaNextError(
-              'CONNECTION_FAILED',
-              'WhatsApp closed the connection before login completed.',
-              {
-                cause: update.error,
-                recoverable: true,
-              },
-            ),
+            update.error instanceof WhaNextError
+              ? update.error
+              : new WhaNextError(
+                  'CONNECTION_FAILED',
+                  'WhatsApp closed the connection before login completed.',
+                  {
+                    cause: update.error,
+                    recoverable: true,
+                  },
+                ),
           );
         }
       });

@@ -33,12 +33,12 @@ npm install wa-store-migrate
 
 A conversão oficial lê `{ creds, keys }` do auth multifile, chama `migrate({ from: 'baileys', to: 'zapo', data })` e grava o resultado em um store Zapo novo. Consulte o guia oficial **Migrating from Baileys** do Zapo para usar o exemplo atualizado da versão que estiver instalada.
 
-No WhaNext, o destino deve ser o `state.sqlite` dentro do diretório `auth` da conta. O `sessionId` precisa ser estável:
+No WhaNext, o `sessionId` precisa ser estável:
 
 - `default` em `create()` quando `accountId` não é informado;
 - o `id` da conta em `createMulti()`.
 
-Converta cada conta separadamente quando usar multi-account.
+Em uma conta única com caminho `auth` customizado, o destino continua sendo `<auth>/state.sqlite`. Em multi-account, uma conversão antiga gravada em `<authRoot>/<id>/state.sqlite` é detectada e consolidada automaticamente no store compartilhado `<authRoot>/state.sqlite` na primeira inicialização da v0.19.6. Converta cada conta separadamente; o provider faz a consolidação sem misturar os `sessionId`s.
 
 ## Mensagens recebidas após reconexão
 

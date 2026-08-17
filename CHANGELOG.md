@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.19.7
+
+### Fixed
+- Zapo edit/revoke protocol mutations are now processed sequentially in arrival order. Back-to-back `MESSAGE_EDIT` -> `REVOKE` events can no longer race and make `messageDeleted.message` expose the pre-edit snapshot.
+- Protocol mutations discovered through the regular `message` event use the same ordered queue as native `message_protocol` events, preserving consistent AntiEdit/AntiDelete behavior across both Zapo delivery shapes.
+
+## 0.19.6
+
+### Fixed
+- Multi-account Zapo sessions now share a single SQLite store per sibling auth root and stay isolated by stable `sessionId`, matching Zapo's multi-session model.
+- Existing per-account `state.sqlite` sessions are migrated into the shared store on first use; removing one account auth directory resets only that account instead of affecting sibling sessions.
+- Zapo session/store handles are released on disconnect and terminal connection failures, preventing failed/restarted accounts from leaving stale SQLite resources behind.
+- Fatal disconnects such as `401`/`516` stop the reconnect loop and surface `AUTH_EXPIRED`; routine `515` reconnects immediately and `402` uses an extended backoff.
+- Passkey-gated linking now fails fast with `AUTH_PASSKEY_REQUIRED` when Zapo reports `auth_passkey_required` without a signer, instead of hanging until the login timeout.
+- `messageDeleted` and `messageEdited` can restore the previous message from a bounded persistent snapshot archive in `whanext-messages.sqlite` when the in-memory cache no longer contains it, including after cache eviction or a process restart.
+- Persistent mutation snapshots are isolated per `sessionId`, retained for up to 7 days, and capped at 20,000 messages per session to avoid unbounded storage growth.
+
+### Compatibility
+- Public `messageDeleted` / `messageEdited` event shapes are unchanged.
+- Existing single-account custom auth paths keep their previous per-directory SQLite layout.
+- `messages` remains disabled in the Zapo mailbox store; WhaNext persists only the compact message snapshot needed for edit/delete recovery in its own SQLite file.
+
 ## 0.19.5
 
 ### Fixed

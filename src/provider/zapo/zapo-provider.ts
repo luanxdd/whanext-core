@@ -1,5 +1,6 @@
-import { mkdir } from 'node:fs/promises';
-import { join } from 'node:path';
+import { mkdir, stat } from 'node:fs/promises';
+import { createRequire } from 'node:module';
+import { basename, dirname, join, resolve } from 'node:path';
 import { createMediaProcessor } from '@zapo-js/media-utils';
 import { createSqliteStore } from '@zapo-js/store-sqlite';
 import {
@@ -10,6 +11,7 @@ import {
   type LogLevel as ZapoLogLevel,
   type Proto,
   type WaIncomingMessageEvent,
+  type WaStore,
 } from 'zapo-js';
 import { Browser } from '@/auth/browser.js';
 import { WhaNextError } from '@/errors/error.js';
@@ -64,6 +66,71 @@ export interface ZapoProviderOptions {
     maxDelayMs?: number;
   };
 }
+
+interface SharedZapoStoreEntry {
+  store: WaStore;
+  snapshotDb: BetterSqliteDatabaseLike;
+  snapshotUpsert: BetterSqliteStatementLike;
+  snapshotGet: BetterSqliteStatementLike;
+  snapshotPruneAge: BetterSqliteStatementLike;
+  snapshotPruneOverflow: BetterSqliteStatementLike;
+  snapshotClearSession: BetterSqliteStatementLike;
+  refs: number;
+  sessionRefs: Map<string, number>;
+  migrationQueue: Promise<void>;
+}
+
+interface BetterSqliteStatementLike {
+  all(...params: unknown[]): unknown[];
+  get(...params: unknown[]): unknown;
+  run(...params: unknown[]): unknown;
+}
+
+interface BetterSqliteDatabaseLike {
+  exec(sql: string): void;
+  prepare(sql: string): BetterSqliteStatementLike;
+  close(): void;
+}
+
+interface BetterSqliteConstructorLike {
+  new(path: string): BetterSqliteDatabaseLike;
+}
+
+interface SqliteTableRow {
+  name?: unknown;
+}
+
+interface SqliteColumnRow {
+  name?: unknown;
+}
+
+interface MessageSnapshotRow {
+  chat_id?: unknown;
+  participant_id?: unknown;
+  from_me?: unknown;
+  timestamp_seconds?: unknown;
+  message_bytes?: unknown;
+}
+
+const require = createRequire(import.meta.url);
+const sharedZapoStores = new Map<string, SharedZapoStoreEntry>();
+const sharedZapoStorePromises = new Map<string, Promise<SharedZapoStoreEntry>>();
+const fatalDisconnectReasons = new Set([
+  'stream_error_replaced',
+  'stream_error_device_removed',
+  'stream_error_force_logout',
+  'failure_not_authorized',
+  'failure_banned',
+  'failure_locked',
+  'failure_client_too_old',
+  'failure_bad_user_agent',
+  'primary_identity_key_change',
+]);
+const fatalDisconnectCodes = new Set([401, 403, 405, 406, 409, 516]);
+const sharedMediaProcessor = createMediaProcessor();
+const messageSnapshotRetentionSeconds = 7 * 24 * 60 * 60;
+const messageSnapshotMaxPerSession = 20_000;
+const messageSnapshotPruneInterval = 256;
 
 interface StoredZapoMessage {
   key: ZapoMessageKeyLike;
@@ -177,14 +244,19 @@ export class ZapoProvider implements WhatsAppProvider {
   readonly #handledProtocolStore = new Set<string>();
   readonly #callCreatorStore = new Map<string, string>();
   readonly #messageCacheSize: number;
+  #protocolMutationQueue: Promise<void> = Promise.resolve();
   #client: WaClient | undefined;
+  #storeEntry: SharedZapoStoreEntry | undefined;
+  #storePath: string | undefined;
   #intentionalClose = false;
+  #closedNotified = false;
   #reconnectAttempt = 0;
   #reconnectTimer: ReturnType<typeof setTimeout> | undefined;
   #connectPromise: Promise<void> | undefined;
   #pairingRequired = false;
   #connected = false;
   #connectedAtSeconds = 0;
+  #messageSnapshotsSincePrune = 0;
   #pairingReady: Promise<void> = Promise.resolve();
   #resolvePairingReady: (() => void) | undefined;
 
@@ -203,6 +275,7 @@ export class ZapoProvider implements WhatsAppProvider {
 
   async connect(): Promise<void> {
     this.#intentionalClose = false;
+    this.#closedNotified = false;
     const client = await this.#ensureClient();
 
     if (this.#connected || this.#connectPromise) {
@@ -228,13 +301,16 @@ export class ZapoProvider implements WhatsAppProvider {
     const client = this.#client;
     this.#connectPromise = undefined;
 
-    if (client) {
-      await client.disconnect();
-    } else {
-      await this.#events.emit('connection', { state: 'closed' });
+    try {
+      if (client) {
+        await client.disconnect();
+      } else {
+        await this.#emitClosedOnce();
+      }
+    } finally {
+      this.#connected = false;
+      await this.#releaseStore();
     }
-
-    this.#connected = false;
   }
 
   getCurrentUserIds(): string[] {
@@ -315,7 +391,7 @@ export class ZapoProvider implements WhatsAppProvider {
     chatId: string,
     options: RepostMessageOptions = {},
   ): Promise<SentMessage> {
-    const original = this.#findStoredMessage(this.#toZapoKey(source));
+    const original = await this.#findStoredMessage(this.#toZapoKey(source));
 
     if (!original?.message) {
       throw new WhaNextError(
@@ -354,7 +430,7 @@ export class ZapoProvider implements WhatsAppProvider {
 
   async downloadMedia(key: MessageKey): Promise<DownloadedMedia> {
     const message = this.#messageKeyStore.get(key)
-      ?? this.#findStoredMessage(this.#toZapoKey(key));
+      ?? await this.#findStoredMessage(this.#toZapoKey(key));
 
     if (!message?.message) {
       throw new WhaNextError(
@@ -551,34 +627,29 @@ export class ZapoProvider implements WhatsAppProvider {
   async #ensureClient(): Promise<WaClient> {
     if (this.#client) return this.#client;
 
-    await mkdir(this.#options.auth, { recursive: true });
-    const store = createStore({
-      backends: {
-        sqlite: createSqliteStore({
-          path: join(this.#options.auth, 'state.sqlite'),
-          driver: 'auto',
-        }),
-      },
-      providers: {
-        auth: 'sqlite',
-        signal: 'sqlite',
-        preKey: 'sqlite',
-        session: 'sqlite',
-        identity: 'sqlite',
-        senderKey: 'sqlite',
-        appState: 'sqlite',
-        privacyToken: 'sqlite',
-        messages: 'none',
-        threads: 'none',
-        contacts: 'none',
-      },
-      cacheProviders: {
-        messageSecret: 'sqlite',
-      },
-    });
+    const authPath = resolve(this.#options.auth);
+    const sessionId = this.#sessionId();
+    const authPathExisted = await fileExists(authPath);
+    const legacyStorePath = join(authPath, 'state.sqlite');
+    const canShareByDirectory = sessionId !== 'default' && basename(authPath) === sessionId;
+    const storePath = canShareByDirectory
+      ? join(dirname(authPath), 'state.sqlite')
+      : legacyStorePath;
+    const resetSharedSession = canShareByDirectory
+      && !authPathExisted
+      && await fileExists(storePath);
+
+    await mkdir(authPath, { recursive: true });
+    const storeEntry = await acquireSharedZapoStore(
+      storePath,
+      sessionId,
+      legacyStorePath,
+      resetSharedSession,
+      this.#logger,
+    );
     const client = new WaClient({
-      store,
-      sessionId: this.#options.sessionId ?? 'default',
+      store: storeEntry.store,
+      sessionId,
       markOnlineOnConnect: false,
       deviceBrowser: this.#deviceBrowser(),
       deviceOsDisplayName: this.#deviceOsDisplayName(),
@@ -587,9 +658,11 @@ export class ZapoProvider implements WhatsAppProvider {
         autoDecrypt: true,
         persistAllSecrets: true,
       },
-      media: { processor: createMediaProcessor() },
+      media: { processor: sharedMediaProcessor },
     }, new WhaNextZapoLogger(this.#logger));
 
+    this.#storeEntry = storeEntry;
+    this.#storePath = storePath;
     this.#client = client;
     this.#bind(client);
     return client;
@@ -608,10 +681,21 @@ export class ZapoProvider implements WhatsAppProvider {
       this.#pairingRequired = false;
     });
 
+    client.on('auth_passkey_required', ({ hasSigner }) => {
+      if (hasSigner) return;
+
+      const error = new WhaNextError(
+        'AUTH_PASSKEY_REQUIRED',
+        'WhatsApp requires a passkey assertion to link this account, but no passkey signer is configured.',
+        { recoverable: false },
+      );
+      void this.#stopTerminalConnection(client, error);
+    });
+
     client.on('message', (event) => {
       const protocol = this.#protocolMessage(event as unknown as ZapoProtocolEventLike);
       if (protocol && this.#isMessageMutationProtocol(protocol.type)) {
-        this.#handleProtocolEvent({
+        this.#enqueueProtocolEvent({
           ...(event as unknown as ZapoProtocolEventLike),
           protocolMessage: protocol,
         });
@@ -636,7 +720,7 @@ export class ZapoProvider implements WhatsAppProvider {
     });
 
     client.on('message_protocol', (event) => {
-      this.#handleProtocolEvent(event as unknown as ZapoProtocolEventLike);
+      this.#enqueueProtocolEvent(event as unknown as ZapoProtocolEventLike);
     });
 
     client.on('message_addon', (event) => {
@@ -745,7 +829,7 @@ export class ZapoProvider implements WhatsAppProvider {
           : {}),
     };
 
-    this.#handleProtocolEvent({
+    void this.#handleProtocolEvent({
       key: event.key,
       ...(event.timestampSeconds !== undefined ? { timestampSeconds: event.timestampSeconds } : {}),
       protocolMessage: {
@@ -837,7 +921,18 @@ export class ZapoProvider implements WhatsAppProvider {
     return timestamp < this.#connectedAtSeconds - 3;
   }
 
-  #handleProtocolEvent(event: ZapoProtocolEventLike): void {
+  #enqueueProtocolEvent(event: ZapoProtocolEventLike): void {
+    this.#protocolMutationQueue = this.#protocolMutationQueue
+      .then(() => this.#handleProtocolEvent(event))
+      .catch((error) => {
+        this.#logger.debug('Could not process a Zapo protocol mutation.', {
+          error: error instanceof Error ? error : new Error(String(error)),
+          messageId: event.key.id ?? undefined,
+        });
+      });
+  }
+
+  async #handleProtocolEvent(event: ZapoProtocolEventLike): Promise<void> {
     if (this.#shouldIgnoreProtocolEvent(event)) {
       this.#logger.debug('Ignored protocol mutation from before the current live connection.', {
         messageId: event.key.id ?? undefined,
@@ -869,7 +964,7 @@ export class ZapoProvider implements WhatsAppProvider {
       ...(participantAlt !== undefined ? { participantAlt } : {}),
     };
 
-    const stored = this.#findStoredMessage(target);
+    const stored = await this.#findStoredMessage(target);
     if (!target.remoteJid && stored?.key.remoteJid) target.remoteJid = stored.key.remoteJid;
     if (!target.remoteJid) return;
 
@@ -987,7 +1082,12 @@ export class ZapoProvider implements WhatsAppProvider {
 
   async #handleConnectionEvent(
     client: WaClient,
-    event: { status: 'open' | 'close'; reason?: unknown; isLogout?: boolean },
+    event: {
+      status: 'open' | 'close';
+      reason?: unknown;
+      code?: number | null;
+      isLogout?: boolean;
+    },
   ): Promise<void> {
     if (client !== this.#client) return;
 
@@ -996,27 +1096,33 @@ export class ZapoProvider implements WhatsAppProvider {
       this.#connected = true;
       this.#connectedAtSeconds = Math.floor(Date.now() / 1_000);
       this.#reconnectAttempt = 0;
+      this.#closedNotified = false;
       await this.#events.emit('connection', { state: 'connected' });
       return;
     }
 
     this.#connectPromise = undefined;
     this.#connected = false;
-    const error = event.reason instanceof Error
-      ? event.reason
-      : event.reason
-        ? new Error(String(event.reason))
-        : undefined;
+    const details = disconnectDetails(event.reason, event.code);
+    const error = connectionError(event.reason, details);
 
-    if (this.#intentionalClose || event.isLogout) {
-      await this.#events.emit('connection', {
-        state: 'closed',
-        ...(error ? { error } : {}),
-      });
+    if (
+      this.#intentionalClose
+      || event.isLogout === true
+      || shouldStopAutomaticReconnect(details)
+    ) {
+      if (!this.#intentionalClose && shouldStopAutomaticReconnect(details)) {
+        this.#logger.warn('WhatsApp closed the session with a non-retryable reason.', {
+          ...(details.reason ? { reason: details.reason } : {}),
+          ...(details.code !== undefined ? { code: details.code } : {}),
+        });
+      }
+      await this.#emitClosedOnce(error);
+      await this.#releaseStore();
       return;
     }
 
-    await this.#scheduleReconnect(error);
+    await this.#scheduleReconnect(error, reconnectDelayOverride(details));
   }
 
   #startConnect(client: WaClient): void {
@@ -1028,23 +1134,83 @@ export class ZapoProvider implements WhatsAppProvider {
 
       if (this.#intentionalClose) return;
 
-      const normalized = error instanceof Error ? error : new Error(String(error));
+      const details = disconnectDetails(error);
+      const normalized = connectionError(error, details)
+        ?? (error instanceof Error ? error : new Error(String(error)));
       this.#logger.warn('WhatsApp connection attempt failed.', { error: normalized });
-      await this.#scheduleReconnect(normalized);
+
+      if (shouldStopAutomaticReconnect(details)) {
+        await this.#stopTerminalConnection(client, normalized);
+        return;
+      }
+
+      await this.#scheduleReconnect(normalized, reconnectDelayOverride(details));
     });
   }
 
-  async #scheduleReconnect(error?: Error): Promise<void> {
+  async #stopTerminalConnection(client: WaClient, error: Error): Promise<void> {
+    if (client !== this.#client) return;
+
+    this.#intentionalClose = true;
+    if (this.#reconnectTimer) {
+      clearTimeout(this.#reconnectTimer);
+      this.#reconnectTimer = undefined;
+    }
+    this.#connectPromise = undefined;
+    this.#connected = false;
+    await this.#emitClosedOnce(error);
+
+    this.#client = undefined;
+    try {
+      await client.disconnect();
+    } catch (disconnectError) {
+      this.#logger.debug('Could not close a terminal Zapo connection cleanly.', {
+        error: disconnectError instanceof Error
+          ? disconnectError
+          : new Error(String(disconnectError)),
+      });
+    } finally {
+      await this.#releaseStore();
+    }
+  }
+
+  async #emitClosedOnce(error?: Error): Promise<void> {
+    if (this.#closedNotified) return;
+    this.#closedNotified = true;
+    await this.#events.emit('connection', {
+      state: 'closed',
+      ...(error ? { error } : {}),
+    });
+  }
+
+  async #releaseStore(): Promise<void> {
+    const entry = this.#storeEntry;
+    const storePath = this.#storePath;
+    const sessionId = this.#sessionId();
+    this.#storeEntry = undefined;
+    this.#storePath = undefined;
+    this.#client = undefined;
+
+    if (!entry || !storePath) return;
+    await releaseSharedZapoStore(storePath, sessionId, entry, this.#logger);
+  }
+
+  #sessionId(): string {
+    return this.#options.sessionId ?? 'default';
+  }
+
+  async #scheduleReconnect(
+    error?: Error,
+    delayOverrideMs?: number,
+  ): Promise<void> {
     if (this.#reconnectTimer) return;
 
     const options = this.#options.reconnect;
     const maxAttempts = options?.maxAttempts ?? 10;
 
     if (options?.enabled === false || this.#reconnectAttempt >= maxAttempts) {
-      await this.#events.emit('connection', {
-        state: 'closed',
-        ...(error ? { error } : {}),
-      });
+      await this.#emitClosedOnce(error);
+      await this.#releaseStore();
       return;
     }
 
@@ -1057,11 +1223,13 @@ export class ZapoProvider implements WhatsAppProvider {
 
     const initial = options?.initialDelayMs ?? 1_000;
     const maximum = options?.maxDelayMs ?? 30_000;
-    const delay = Math.min(maximum, initial * 2 ** (this.#reconnectAttempt - 1));
+    const exponential = Math.min(maximum, initial * 2 ** (this.#reconnectAttempt - 1));
+    const delay = delayOverrideMs ?? exponential;
+    const jitter = delay > 0 ? Math.floor(Math.random() * 250) : 0;
     this.#reconnectTimer = setTimeout(() => {
       this.#reconnectTimer = undefined;
       void this.connect();
-    }, delay + Math.floor(Math.random() * 250));
+    }, delay + jitter);
   }
 
   async #sendButtons(
@@ -1455,7 +1623,7 @@ export class ZapoProvider implements WhatsAppProvider {
       participant.jid ?? participant.lidJid ?? participant.phoneJid));
   }
 
-  #findStoredMessage(key: ZapoMessageKeyLike): StoredZapoMessage | undefined {
+  async #findStoredMessage(key: ZapoMessageKeyLike): Promise<StoredZapoMessage | undefined> {
     const direct = this.#messageStore.get(this.#messageStoreKey(key));
     if (direct) return direct;
     if (!key.id) return undefined;
@@ -1475,7 +1643,7 @@ export class ZapoProvider implements WhatsAppProvider {
       return storedQuoted;
     }
 
-    return undefined;
+    return this.#readArchivedMessage(key);
   }
 
   #remember(message: StoredZapoMessage): void {
@@ -1484,10 +1652,104 @@ export class ZapoProvider implements WhatsAppProvider {
     const key = this.#messageStoreKey(message.key);
     this.#messageStore.delete(key);
     this.#messageStore.set(key, message);
+    void this.#archiveMessage(message);
 
     while (this.#messageStore.size > this.#messageCacheSize) {
       const oldest = this.#messageStore.keys().next().value as string | undefined;
       if (oldest) this.#messageStore.delete(oldest);
+    }
+  }
+
+  async #archiveMessage(message: StoredZapoMessage): Promise<void> {
+    const id = message.key.id;
+    const chatId = message.key.remoteJid;
+    const content = message.message;
+    const entry = this.#storeEntry;
+    if (!id || !chatId || !content || !entry) return;
+
+    try {
+      const participantId = message.key.participant ?? message.key.participantAlt ?? null;
+      const timestampSeconds = toSeconds(message.timestampSeconds) ?? null;
+      const messageBytes = Buffer.from(proto.Message.encode(content).finish());
+      const storedAtSeconds = Math.floor(Date.now() / 1_000);
+      const sessionId = this.#sessionId();
+      entry.snapshotUpsert.run(
+        sessionId,
+        id,
+        chatId,
+        participantId,
+        message.key.fromMe === true ? 1 : 0,
+        timestampSeconds,
+        messageBytes,
+        storedAtSeconds,
+      );
+
+      this.#messageSnapshotsSincePrune += 1;
+      if (this.#messageSnapshotsSincePrune >= messageSnapshotPruneInterval) {
+        this.#messageSnapshotsSincePrune = 0;
+        entry.snapshotPruneAge.run(
+          sessionId,
+          storedAtSeconds - messageSnapshotRetentionSeconds,
+        );
+        entry.snapshotPruneOverflow.run(
+          sessionId,
+          sessionId,
+          messageSnapshotMaxPerSession,
+        );
+      }
+    } catch (error) {
+      this.#logger.debug('Could not archive a message snapshot for mutation recovery.', {
+        error: error instanceof Error ? error : new Error(String(error)),
+        messageId: id,
+        chatId,
+      });
+    }
+  }
+
+  async #readArchivedMessage(key: ZapoMessageKeyLike): Promise<StoredZapoMessage | undefined> {
+    const id = key.id;
+    const entry = this.#storeEntry;
+    if (!id || !entry) return undefined;
+
+    try {
+      const archived = entry.snapshotGet.get(
+        this.#sessionId(),
+        id,
+      ) as MessageSnapshotRow | undefined;
+      const messageBytes = bytesField(archived?.message_bytes);
+      if (!archived || !messageBytes) return undefined;
+
+      const archivedChatId = stringValue(archived.chat_id);
+      const remoteJid = key.remoteJid ?? archivedChatId;
+      if (!remoteJid) return undefined;
+      const participant = key.participant
+        ?? key.participantAlt
+        ?? stringValue(archived.participant_id);
+      const archivedFromMe = booleanValue(archived.from_me);
+      const timestampSeconds = numberValue(archived.timestamp_seconds);
+      const fromMe = key.fromMe ?? archivedFromMe;
+      const restored: StoredZapoMessage = {
+        key: {
+          ...key,
+          id,
+          remoteJid,
+          ...(fromMe !== undefined ? { fromMe } : {}),
+          ...(participant ? { participant } : {}),
+        },
+        message: proto.Message.decode(messageBytes),
+        ...(timestampSeconds !== undefined ? { timestampSeconds } : {}),
+      };
+
+      const cacheKey = this.#messageStoreKey(restored.key);
+      this.#messageStore.delete(cacheKey);
+      this.#messageStore.set(cacheKey, restored);
+      return restored;
+    } catch (error) {
+      this.#logger.debug('Could not restore a message snapshot for mutation recovery.', {
+        error: error instanceof Error ? error : new Error(String(error)),
+        messageId: id,
+      });
+      return undefined;
     }
   }
 
@@ -1602,6 +1864,493 @@ export class ZapoProvider implements WhatsAppProvider {
       if (timer) clearTimeout(timer);
     }
   }
+}
+
+interface DisconnectDetails {
+  reason?: string;
+  code?: number;
+}
+
+function disconnectDetails(value: unknown, explicitCode?: number | null): DisconnectDetails {
+  let code = typeof explicitCode === 'number' ? explicitCode : undefined;
+  let reason: string | undefined;
+  const queue: unknown[] = [value];
+  const seen = new Set<object>();
+
+  for (let depth = 0; queue.length > 0 && depth < 12; depth += 1) {
+    const current = queue.shift();
+    if (typeof current === 'string') {
+      if (/^\d+$/.test(current)) {
+        code ??= Number(current);
+      } else {
+        reason ??= current;
+      }
+      continue;
+    }
+    if (!current || typeof current !== 'object') continue;
+    if (seen.has(current)) continue;
+    seen.add(current);
+
+    const record = current as Record<string, unknown>;
+    const directCode = record.code;
+    const statusCode = record.statusCode;
+    if (typeof directCode === 'number') code ??= directCode;
+    if (typeof statusCode === 'number') code ??= statusCode;
+
+    const directReason = record.reason;
+    const failureReason = record.failureReason;
+    if (typeof directReason === 'string') {
+      if (/^\d+$/.test(directReason)) code ??= Number(directReason);
+      else reason ??= directReason;
+    }
+    if (typeof failureReason === 'string') reason ??= failureReason;
+
+    const output = record.output;
+    const data = record.data;
+    if (output && typeof output === 'object') queue.push(output);
+    if (data && typeof data === 'object') queue.push(data);
+    if (record.cause !== undefined) queue.push(record.cause);
+  }
+
+  return {
+    ...(reason ? { reason } : {}),
+    ...(code !== undefined ? { code } : {}),
+  };
+}
+
+function shouldStopAutomaticReconnect(details: DisconnectDetails): boolean {
+  if (details.reason === 'client_disconnected') return true;
+  if (details.reason && fatalDisconnectReasons.has(details.reason)) return true;
+  return details.code !== undefined && fatalDisconnectCodes.has(details.code);
+}
+
+function reconnectDelayOverride(details: DisconnectDetails): number | undefined {
+  if (details.code === 515) return 0;
+  if (details.code === 402) return 60_000;
+  return undefined;
+}
+
+function connectionError(value: unknown, details: DisconnectDetails): Error | undefined {
+  if (value === undefined && details.code === undefined && details.reason === undefined) {
+    return undefined;
+  }
+
+  const authExpired = details.code === 401
+    || details.code === 516
+    || details.reason === 'failure_not_authorized'
+    || details.reason === 'stream_error_device_removed'
+    || details.reason === 'stream_error_force_logout'
+    || details.reason === 'primary_identity_key_change';
+  const cause = value instanceof Error
+    ? value
+    : details.code !== undefined
+      ? {
+          output: { statusCode: details.code },
+          data: { reason: String(details.code) },
+          ...(value !== undefined ? { cause: value } : {}),
+        }
+      : value;
+  const message = authExpired
+    ? 'WhatsApp authorization is no longer valid and the account must be paired again.'
+    : details.code === 402
+      ? 'WhatsApp temporarily refused this session. The next reconnect will use an extended backoff.'
+      : 'WhatsApp closed the connection.';
+
+  return new WhaNextError(
+    authExpired ? 'AUTH_EXPIRED' : 'CONNECTION_FAILED',
+    message,
+    {
+      ...(cause !== undefined ? { cause } : {}),
+      context: {
+        ...(details.reason ? { reason: details.reason } : {}),
+        ...(details.code !== undefined ? { statusCode: details.code } : {}),
+      },
+      recoverable: details.code === 402
+        || details.code === 500
+        || details.code === 503
+        || details.code === 515,
+    },
+  );
+}
+
+async function acquireSharedZapoStore(
+  storePath: string,
+  sessionId: string,
+  legacyStorePath: string,
+  resetSession: boolean,
+  logger: Logger,
+): Promise<SharedZapoStoreEntry> {
+  if (storePath === legacyStorePath) {
+    const entry = createZapoStoreEntry(storePath);
+    entry.refs = 1;
+    entry.sessionRefs.set(sessionId, 1);
+    return entry;
+  }
+
+  let pending = sharedZapoStorePromises.get(storePath);
+
+  if (!pending) {
+    pending = (async () => {
+      await mkdir(dirname(storePath), { recursive: true });
+      const entry = createZapoStoreEntry(storePath);
+      sharedZapoStores.set(storePath, entry);
+      return entry;
+    })();
+    sharedZapoStorePromises.set(storePath, pending);
+  }
+
+  let entry: SharedZapoStoreEntry;
+  try {
+    entry = await pending;
+  } catch (error) {
+    if (sharedZapoStorePromises.get(storePath) === pending) {
+      sharedZapoStorePromises.delete(storePath);
+    }
+    throw error;
+  }
+
+  entry.refs += 1;
+  entry.sessionRefs.set(sessionId, (entry.sessionRefs.get(sessionId) ?? 0) + 1);
+
+  if (resetSession || await fileExists(legacyStorePath)) {
+    entry.migrationQueue = entry.migrationQueue.then(async () => {
+      if (resetSession) {
+        clearZapoSessionData(storePath, sessionId);
+        entry.snapshotClearSession.run(sessionId);
+      }
+      if (await fileExists(legacyStorePath)) {
+        await migrateLegacyZapoStore(storePath, legacyStorePath, sessionId, logger);
+      }
+    });
+    await entry.migrationQueue;
+  }
+
+  return entry;
+}
+
+function createZapoStoreEntry(storePath: string): SharedZapoStoreEntry {
+  const store = createStore({
+    backends: {
+      sqlite: createSqliteStore({
+        path: storePath,
+        driver: 'auto',
+      }),
+    },
+    providers: {
+      auth: 'sqlite',
+      signal: 'sqlite',
+      preKey: 'sqlite',
+      session: 'sqlite',
+      identity: 'sqlite',
+      senderKey: 'sqlite',
+      appState: 'sqlite',
+      privacyToken: 'sqlite',
+      messages: 'none',
+      threads: 'none',
+      contacts: 'none',
+    },
+    cacheProviders: {
+      messageSecret: 'sqlite',
+    },
+  });
+
+  const Database = require('better-sqlite3') as BetterSqliteConstructorLike;
+  const snapshotDb = new Database(messageSnapshotStorePath(storePath));
+  snapshotDb.exec(`
+    PRAGMA busy_timeout = 5000;
+    CREATE TABLE IF NOT EXISTS whanext_message_snapshots (
+      session_id TEXT NOT NULL,
+      message_id TEXT NOT NULL,
+      chat_id TEXT NOT NULL,
+      participant_id TEXT,
+      from_me INTEGER NOT NULL,
+      timestamp_seconds INTEGER,
+      message_bytes BLOB NOT NULL,
+      stored_at_seconds INTEGER NOT NULL,
+      PRIMARY KEY (session_id, message_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_whanext_message_snapshots_chat
+      ON whanext_message_snapshots (session_id, chat_id);
+  `);
+
+  const snapshotColumns = snapshotDb.prepare(
+    'PRAGMA table_info(whanext_message_snapshots)',
+  ).all()
+    .map((column) => stringField(column as SqliteColumnRow, 'name'))
+    .filter((name): name is string => name !== undefined);
+  if (!snapshotColumns.includes('stored_at_seconds')) {
+    snapshotDb.exec(
+      'ALTER TABLE whanext_message_snapshots ADD COLUMN stored_at_seconds INTEGER NOT NULL DEFAULT 0',
+    );
+  }
+  snapshotDb.exec(`
+    CREATE INDEX IF NOT EXISTS idx_whanext_message_snapshots_retention
+      ON whanext_message_snapshots (session_id, stored_at_seconds);
+  `);
+
+  return {
+    store,
+    snapshotDb,
+    snapshotUpsert: snapshotDb.prepare(`
+      INSERT INTO whanext_message_snapshots (
+        session_id, message_id, chat_id, participant_id, from_me,
+        timestamp_seconds, message_bytes, stored_at_seconds
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(session_id, message_id) DO UPDATE SET
+        chat_id = excluded.chat_id,
+        participant_id = excluded.participant_id,
+        from_me = excluded.from_me,
+        timestamp_seconds = excluded.timestamp_seconds,
+        message_bytes = excluded.message_bytes,
+        stored_at_seconds = excluded.stored_at_seconds
+    `),
+    snapshotGet: snapshotDb.prepare(`
+      SELECT chat_id, participant_id, from_me, timestamp_seconds, message_bytes
+      FROM whanext_message_snapshots
+      WHERE session_id = ? AND message_id = ?
+      LIMIT 1
+    `),
+    snapshotPruneAge: snapshotDb.prepare(`
+      DELETE FROM whanext_message_snapshots
+      WHERE session_id = ? AND stored_at_seconds < ?
+    `),
+    snapshotPruneOverflow: snapshotDb.prepare(`
+      DELETE FROM whanext_message_snapshots
+      WHERE session_id = ?
+        AND message_id IN (
+          SELECT message_id
+          FROM whanext_message_snapshots
+          WHERE session_id = ?
+          ORDER BY stored_at_seconds DESC
+          LIMIT -1 OFFSET ?
+        )
+    `),
+    snapshotClearSession: snapshotDb.prepare(`
+      DELETE FROM whanext_message_snapshots
+      WHERE session_id = ?
+    `),
+    refs: 0,
+    sessionRefs: new Map<string, number>(),
+    migrationQueue: Promise.resolve(),
+  };
+}
+
+function messageSnapshotStorePath(storePath: string): string {
+  return join(dirname(storePath), 'whanext-messages.sqlite');
+}
+
+async function releaseSharedZapoStore(
+  storePath: string,
+  sessionId: string,
+  entry: SharedZapoStoreEntry,
+  logger: Logger,
+): Promise<void> {
+  const currentSessionRefs = entry.sessionRefs.get(sessionId) ?? 0;
+  if (currentSessionRefs <= 1) {
+    entry.sessionRefs.delete(sessionId);
+    try {
+      await entry.store.session(sessionId).destroy();
+    } catch (error) {
+      logger.warn('Could not release the Zapo session store cleanly.', {
+        error: error instanceof Error ? error : new Error(String(error)),
+        sessionId,
+      });
+    }
+  } else {
+    entry.sessionRefs.set(sessionId, currentSessionRefs - 1);
+  }
+
+  entry.refs = Math.max(0, entry.refs - 1);
+  if (entry.refs > 0) return;
+
+  if (sharedZapoStores.get(storePath) === entry) {
+    sharedZapoStores.delete(storePath);
+    sharedZapoStorePromises.delete(storePath);
+  }
+
+  try {
+    await entry.store.destroy();
+  } catch (error) {
+    logger.warn('Could not close the shared Zapo store cleanly.', {
+      error: error instanceof Error ? error : new Error(String(error)),
+      storePath,
+    });
+  } finally {
+    try {
+      entry.snapshotDb.close();
+    } catch (error) {
+      logger.debug('Could not close the WhaNext message snapshot database cleanly.', {
+        error: error instanceof Error ? error : new Error(String(error)),
+        storePath,
+      });
+    }
+  }
+}
+
+function clearZapoSessionData(
+  storePath: string,
+  sessionId: string,
+): void {
+  let db: BetterSqliteDatabaseLike | undefined;
+
+  try {
+    const Database = require('better-sqlite3') as BetterSqliteConstructorLike;
+    db = new Database(storePath);
+    const tables = db.prepare(
+      "SELECT name FROM main.sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'",
+    ).all();
+
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      for (const row of tables) {
+        const table = stringField(row as SqliteTableRow, 'name');
+        if (!table || table === 'wa_migrations' || table === 'whanext_core_migrations') {
+          continue;
+        }
+
+        const quoted = sqliteIdentifier(table);
+        const columns = db.prepare(`PRAGMA main.table_info(${quoted})`).all()
+          .map((column) => stringField(column as SqliteColumnRow, 'name'))
+          .filter((name): name is string => name !== undefined);
+        if (!columns.includes('session_id')) continue;
+
+        db.prepare(`DELETE FROM main.${quoted} WHERE session_id = ?`).run(sessionId);
+      }
+      db.exec('COMMIT');
+    } catch (error) {
+      db.exec('ROLLBACK');
+      throw error;
+    }
+  } finally {
+    db?.close();
+  }
+}
+
+async function migrateLegacyZapoStore(
+  storePath: string,
+  legacyStorePath: string,
+  sessionId: string,
+  logger: Logger,
+): Promise<void> {
+  let db: BetterSqliteDatabaseLike | undefined;
+
+  try {
+    const Database = require('better-sqlite3') as BetterSqliteConstructorLike;
+    db = new Database(storePath);
+    db.exec(`ATTACH DATABASE ${sqliteString(legacyStorePath)} AS legacy`);
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS whanext_core_migrations (
+        migration_key TEXT PRIMARY KEY,
+        migrated_at INTEGER NOT NULL
+      )
+    `);
+
+    const migrationKey = `shared-store:${resolve(legacyStorePath)}:${sessionId}`;
+    const migrated = db.prepare(
+      'SELECT migration_key FROM whanext_core_migrations WHERE migration_key = ?',
+    ).get(migrationKey);
+    if (migrated) return;
+
+    const mainTables = new Set(
+      db.prepare("SELECT name FROM main.sqlite_master WHERE type = 'table'")
+        .all()
+        .map((row) => stringField(row as SqliteTableRow, 'name'))
+        .filter((name): name is string => name !== undefined),
+    );
+    const legacyTables = db.prepare(
+      "SELECT name FROM legacy.sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'",
+    ).all();
+
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      for (const row of legacyTables) {
+        const table = stringField(row as SqliteTableRow, 'name');
+        if (!table || !mainTables.has(table) || table === 'wa_migrations' || table === 'whanext_core_migrations') {
+          continue;
+        }
+
+        const quoted = sqliteIdentifier(table);
+        const mainColumns = db.prepare(`PRAGMA main.table_info(${quoted})`).all()
+          .map((column) => stringField(column as SqliteColumnRow, 'name'))
+          .filter((name): name is string => name !== undefined);
+        const legacyColumns = new Set(
+          db.prepare(`PRAGMA legacy.table_info(${quoted})`).all()
+            .map((column) => stringField(column as SqliteColumnRow, 'name'))
+            .filter((name): name is string => name !== undefined),
+        );
+        const columns = mainColumns.filter((column) => legacyColumns.has(column));
+        if (!columns.includes('session_id') || columns.length === 0) continue;
+
+        const selected = columns.map(sqliteIdentifier).join(', ');
+        db.prepare(
+          `INSERT OR REPLACE INTO main.${quoted} (${selected}) SELECT ${selected} FROM legacy.${quoted} WHERE session_id = ?`,
+        ).run(sessionId);
+      }
+
+      db.prepare(
+        'INSERT OR REPLACE INTO whanext_core_migrations (migration_key, migrated_at) VALUES (?, ?)',
+      ).run(migrationKey, Date.now());
+      db.exec('COMMIT');
+    } catch (error) {
+      db.exec('ROLLBACK');
+      throw error;
+    }
+  } catch (error) {
+    logger.warn('Could not migrate the legacy per-account Zapo store; keeping the shared store active.', {
+      error: error instanceof Error ? error : new Error(String(error)),
+      sessionId,
+      legacyStorePath,
+      storePath,
+    });
+  } finally {
+    if (db) {
+      try {
+        db.exec('DETACH DATABASE legacy');
+      } catch {}
+      db.close();
+    }
+  }
+}
+
+async function fileExists(path: string): Promise<boolean> {
+  try {
+    await stat(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function sqliteIdentifier(value: string): string {
+  return `"${value.replaceAll('"', '""')}"`;
+}
+
+function sqliteString(value: string): string {
+  return `'${value.replaceAll("'", "''")}'`;
+}
+
+function stringField(record: SqliteTableRow | SqliteColumnRow, field: 'name'): string | undefined {
+  const value = record[field];
+  return typeof value === 'string' && value.length > 0 ? value : undefined;
+}
+
+function stringValue(value: unknown): string | undefined {
+  return typeof value === 'string' && value.length > 0 ? value : undefined;
+}
+
+function numberValue(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function booleanValue(value: unknown): boolean | undefined {
+  if (value === true || value === 1) return true;
+  if (value === false || value === 0) return false;
+  return undefined;
+}
+
+function bytesField(value: unknown): Uint8Array | undefined {
+  if (value instanceof Uint8Array) return value;
+  return undefined;
 }
 
 

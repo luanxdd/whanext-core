@@ -141,7 +141,7 @@ Nesse exemplo, `&open`, `!open`, `.abrir`, `&a` e `a` funcionam. `open` e `abrir
 
 ## Múltiplas contas
 
-Para manter duas, três ou mais contas de WhatsApp no mesmo processo, use `createMulti()`. Cada conta possui conexão, sessão, cache, reconexão e identidade próprios. A instância conjunta apenas coordena essas aplicações independentes.
+Para manter duas, três ou mais contas de WhatsApp no mesmo processo, use `createMulti()`. Cada conta possui conexão, `sessionId`, cache, reconexão e identidade próprios. No provider Zapo, contas irmãs compartilham o mesmo backend SQLite e permanecem isoladas pelo `sessionId`, evitando abrir um store concorrente por número.
 
 ```ts
 import {
@@ -179,7 +179,7 @@ await multi.login({
 });
 ```
 
-Quando `auth` não é informado na conta, o WhaNext cria automaticamente caminhos separados como `./sessions/principal`, `./sessions/secundaria` e `./sessions/terceira`. O mesmo diretório de sessão não pode ser usado por duas contas do provider padrão.
+Quando `auth` não é informado na conta, o WhaNext cria automaticamente caminhos separados como `./sessions/principal`, `./sessions/secundaria` e `./sessions/terceira`. Esses diretórios continuam identificando cada conta, enquanto o provider usa `./sessions/state.sqlite` como store compartilhado. O mesmo `id`/`sessionId` não deve ser usado por duas contas diferentes.
 
 Uma conta específica continua sendo um `WhaNextApp` completo:
 
@@ -197,7 +197,7 @@ if (principal?.isReady) {
 
 ## Mensagens apagadas
 
-Revogações recebidas pelo WhatsApp são expostas pelo evento `messageDeleted`. Quando a mensagem original ainda estiver no cache recente, o payload inclui `message`, que pode ser republicada ou usada para baixar a mídia pelas APIs existentes.
+Revogações recebidas pelo WhatsApp são expostas pelo evento `messageDeleted`. O provider mantém em `whanext-messages.sqlite` um snapshot compacto e persistente das mensagens recentes para recuperar `message` mesmo após expulsão do cache em memória ou reinício do processo. O snapshot é isolado por `sessionId`, retido por até 7 dias e limitado às 20.000 mensagens mais recentes por sessão.
 
 ```ts
 app.on('messageDeleted', async ({ message, deletedByMe }) => {
@@ -211,7 +211,7 @@ O evento também informa `deletedById` quando o WhatsApp fornece a identidade re
 
 ## Mensagens editadas
 
-Edições recebidas pelo WhatsApp são expostas pelo evento `messageEdited`. A partir da 0.17.1, o provider inclui suporte ao envelope criptografado `secretEncryptedMessage` usado atualmente pelo WhatsApp para edições. Quando a versão anterior ainda estiver no cache recente, o payload inclui `previous`; `message` contém a versão atual.
+Edições recebidas pelo WhatsApp são expostas pelo evento `messageEdited`. O provider inclui suporte ao envelope criptografado `secretEncryptedMessage` e mantém um snapshot compacto persistente para recuperar `previous` quando a versão anterior já saiu do cache em memória ou após reinício do processo. `message` contém a versão atual.
 
 ```ts
 app.on('messageEdited', async ({ previous, message, editedByMe }) => {
@@ -221,7 +221,7 @@ app.on('messageEdited', async ({ previous, message, editedByMe }) => {
 });
 ```
 
-Após cada edição, a nova versão substitui a anterior no cache recente. Assim, edições consecutivas da mesma mensagem sempre comparam a versão atual com a imediatamente anterior.
+Após cada edição, a nova versão substitui a anterior no cache e no snapshot persistente. Assim, edições consecutivas da mesma mensagem comparam a versão atual com a imediatamente anterior.
 
 ## Logging
 

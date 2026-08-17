@@ -92,7 +92,12 @@ export function isZapoViewOnceContent(
     return true;
   }
 
-  return isZapoViewOnceContent(input.ephemeralMessage?.message);
+  const nested = input.ephemeralMessage?.message
+    ?? input.deviceSentMessage?.message
+    ?? input.documentWithCaptionMessage?.message
+    ?? editedWrapperMessage(input);
+
+  return nested ? isZapoViewOnceContent(nested) : false;
 }
 
 export function extractQuotedZapoMessage(

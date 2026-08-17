@@ -682,6 +682,50 @@ describe('ZapoProvider', () => {
     );
   });
 
+  it('recognizes live view-once media nested inside a device-sent envelope', async () => {
+    const { provider, client: current } = await connectedProvider();
+    const received: any[] = [];
+    provider.on('message', (message) => {
+      received.push(message);
+    });
+
+    current.emit('message', {
+      key: {
+        id: 'device-view-once',
+        remoteJid: '5511999999999@s.whatsapp.net',
+        fromMe: false,
+      },
+      message: {
+        deviceSentMessage: {
+          message: {
+            viewOnceMessageV2: {
+              message: {
+                imageMessage: { mimetype: 'image/jpeg' },
+              },
+            },
+          },
+        },
+      },
+      timestampSeconds: Math.floor(Date.now() / 1_000),
+    });
+    await flushAsync();
+
+    expect(received[0]).toMatchObject({
+      id: 'device-view-once',
+      hasMedia: true,
+      isViewOnce: true,
+      contentKind: 'image',
+      media: {
+        kind: 'image',
+        viewOnce: true,
+      },
+    });
+
+    const media = await provider.downloadMedia(received[0].keys);
+    expect(media.kind).toBe('image');
+    expect([...media.data]).toEqual([1, 2, 3]);
+  });
+
   it('does not publish message events received before the live connection opens', async () => {
     const provider = new ZapoProvider({
       auth: './session',
@@ -949,6 +993,36 @@ describe('ZapoProvider', () => {
 
     expect(edits).toEqual(['depois']);
     expect(deletes).toEqual(['wrapped-target']);
+  });
+
+  it('translates direct editedMessage wrappers into messageEdited events', async () => {
+    const { provider, client: current } = await connectedProvider();
+    const edits: Array<{ previous?: string; current?: string }> = [];
+    provider.on('messageEdited', (event) => {
+      edits.push({
+        ...(event.previous?.text !== undefined ? { previous: event.previous.text } : {}),
+        ...(event.message.text !== undefined ? { current: event.message.text } : {}),
+      });
+    });
+    const now = Math.floor(Date.now() / 1_000);
+
+    current.emit('message', {
+      key: { id: 'direct-edit-target', remoteJid: '5511@s.whatsapp.net', fromMe: false },
+      message: { conversation: 'antes' },
+      timestampSeconds: now,
+    });
+    current.emit('message', {
+      key: { id: 'direct-edit-target', remoteJid: '5511@s.whatsapp.net', fromMe: false },
+      message: {
+        editedMessage: {
+          message: { conversation: 'depois' },
+        },
+      },
+      timestampSeconds: now,
+    });
+    await flushAsync();
+
+    expect(edits).toEqual([{ previous: 'antes', current: 'depois' }]);
   });
 
   it('accepts decrypted edit addons that carry a nested protocol message instead of message_edit kind', async () => {

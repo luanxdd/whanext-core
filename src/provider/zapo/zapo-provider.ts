@@ -706,6 +706,19 @@ export class ZapoProvider implements WhatsAppProvider {
         return;
       }
 
+      const directEdit = this.#directEditedMessage(event.message);
+      if (directEdit && event.key.id) {
+        this.#enqueueProtocolEvent({
+          ...(event as unknown as ZapoProtocolEventLike),
+          protocolMessage: {
+            type: proto.Message.ProtocolMessage.Type.MESSAGE_EDIT,
+            key: event.key,
+            editedMessage: directEdit,
+          },
+        });
+        return;
+      }
+
       this.#handleMessage(event);
     });
 
@@ -914,6 +927,22 @@ export class ZapoProvider implements WhatsAppProvider {
     }
 
     return value as Proto.IMessage;
+  }
+
+  #directEditedMessage(
+    message: Proto.IMessage | null | undefined,
+  ): Proto.IMessage | undefined {
+    if (!message) return undefined;
+
+    const direct = (message as Proto.IMessage & {
+      editedMessage?: { message?: Proto.IMessage | null } | null;
+    }).editedMessage?.message;
+
+    if (direct) return direct;
+
+    const nested = message.ephemeralMessage?.message
+      ?? message.deviceSentMessage?.message;
+    return nested ? this.#directEditedMessage(nested) : undefined;
   }
 
   #protocolMessage(event: ZapoProtocolEventLike): ZapoProtocolEventLike['protocolMessage'] | undefined {

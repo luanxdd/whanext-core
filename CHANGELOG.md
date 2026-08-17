@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.19.11
+
+- Direct `editedMessage` envelopes are now translated into `messageEdited` events instead of being emitted as ordinary messages.
+- View-once detection now follows multi-device and transparent message wrappers before classifying received media.
+- Added regression coverage for direct edit envelopes and device-sent view-once media.
+
 ## 0.19.10
 
 - Fixed restored sessions incorrectly waiting for a pairing challenge after the WhatsApp connection was already open.

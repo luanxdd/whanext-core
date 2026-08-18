@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.19.12
+
+- Added end-to-end AntiEdit diagnostics for encrypted addons, protocol events, direct edit envelopes, normalization, previous-message recovery, and final `messageEdited` emission.
+- Missing parent secrets during Zapo edit-addon decryption now surface as a dedicated `decrypt_failed_missing_parent_secret` warning.
+- Diagnostics contain message identifiers and processing stages, but never message text or encrypted payload bytes.
+
 ## 0.19.11
 
 - Direct `editedMessage` envelopes are now translated into `messageEdited` events instead of being emitted as ordinary messages.

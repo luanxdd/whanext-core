@@ -169,6 +169,10 @@ interface ZapoAddonEventLike {
   offline?: boolean | null;
 }
 
+interface ZapoEncryptedEditInfo {
+  targetMessageId?: string;
+}
+
 interface ZapoGroupEventParticipantLike {
   jid?: string | null;
   lidJid?: string | null;
@@ -699,6 +703,13 @@ export class ZapoProvider implements WhatsAppProvider {
     client.on('message', (event) => {
       const protocol = this.#protocolMessage(event as unknown as ZapoProtocolEventLike);
       if (protocol && this.#isMessageMutationProtocol(protocol.type)) {
+        if (protocol.type === proto.Message.ProtocolMessage.Type.MESSAGE_EDIT) {
+          this.#logEditDiagnostic('received_message_protocol_payload', {
+            eventMessageId: event.key.id ?? undefined,
+            targetMessageId: protocol.key?.id ?? undefined,
+            offline: event.offline === true,
+          });
+        }
         this.#enqueueProtocolEvent({
           ...(event as unknown as ZapoProtocolEventLike),
           protocolMessage: protocol,
@@ -708,6 +719,11 @@ export class ZapoProvider implements WhatsAppProvider {
 
       const directEdit = this.#directEditedMessage(event.message);
       if (directEdit && event.key.id) {
+        this.#logEditDiagnostic('received_direct_edited_message', {
+          eventMessageId: event.key.id,
+          targetMessageId: event.key.id,
+          offline: event.offline === true,
+        });
         this.#enqueueProtocolEvent({
           ...(event as unknown as ZapoProtocolEventLike),
           protocolMessage: {
@@ -717,6 +733,15 @@ export class ZapoProvider implements WhatsAppProvider {
           },
         });
         return;
+      }
+
+      const encryptedEdit = this.#encryptedEditInfo(event.message);
+      if (encryptedEdit) {
+        this.#logEditDiagnostic('received_encrypted_addon', {
+          eventMessageId: event.key.id ?? undefined,
+          targetMessageId: encryptedEdit.targetMessageId,
+          offline: event.offline === true,
+        });
       }
 
       this.#handleMessage(event);
@@ -737,6 +762,13 @@ export class ZapoProvider implements WhatsAppProvider {
     });
 
     client.on('message_protocol', (event) => {
+      if (event.protocolMessage.type === proto.Message.ProtocolMessage.Type.MESSAGE_EDIT) {
+        this.#logEditDiagnostic('received_message_protocol_event', {
+          eventMessageId: event.key.id ?? undefined,
+          targetMessageId: event.protocolMessage.key?.id ?? undefined,
+          offline: event.offline === true,
+        });
+      }
       this.#enqueueProtocolEvent(event as unknown as ZapoProtocolEventLike);
     });
 
@@ -810,15 +842,39 @@ export class ZapoProvider implements WhatsAppProvider {
 
     if (!isEdit) return;
 
+    this.#logEditDiagnostic('received_decrypted_addon', {
+      eventMessageId: event.key.id ?? undefined,
+      targetMessageId: event.targetMessageId
+        ?? this.#stringField(decrypted, 'targetMessageId')
+        ?? this.#stringField(decrypted, 'targetMessageID')
+        ?? protocol?.key?.id
+        ?? undefined,
+      addonKind: kind ?? undefined,
+      offline: event.offline === true,
+    });
+
     const targetMessageId = event.targetMessageId
       ?? this.#stringField(decrypted, 'targetMessageId')
       ?? this.#stringField(decrypted, 'targetMessageID')
       ?? protocol?.key?.id
       ?? undefined;
-    if (!targetMessageId) return;
+    if (!targetMessageId) {
+      this.#logEditDiagnostic('dropped_addon_without_target', {
+        eventMessageId: event.key.id ?? undefined,
+        addonKind: kind ?? undefined,
+      }, 'warn');
+      return;
+    }
 
     const editedMessage = protocol?.editedMessage ?? this.#addonEditedMessage(event.decrypted);
-    if (!editedMessage) return;
+    if (!editedMessage) {
+      this.#logEditDiagnostic('dropped_addon_without_edited_content', {
+        eventMessageId: event.key.id ?? undefined,
+        targetMessageId,
+        addonKind: kind ?? undefined,
+      }, 'warn');
+      return;
+    }
 
     const protocolKey = protocol?.key;
     const target: ZapoMessageKeyLike = {
@@ -945,6 +1001,40 @@ export class ZapoProvider implements WhatsAppProvider {
     return nested ? this.#directEditedMessage(nested) : undefined;
   }
 
+  #encryptedEditInfo(
+    message: Proto.IMessage | null | undefined,
+  ): ZapoEncryptedEditInfo | undefined {
+    const content = unwrapZapoMessageContent(message);
+    const encrypted = content?.secretEncryptedMessage;
+
+    if (!encrypted) return undefined;
+
+    if (
+      encrypted.secretEncType
+      !== proto.Message.SecretEncryptedMessage.SecretEncType.MESSAGE_EDIT
+    ) {
+      return undefined;
+    }
+
+    return {
+      ...(encrypted.targetMessageKey?.id
+        ? { targetMessageId: encrypted.targetMessageKey.id }
+        : {}),
+    };
+  }
+
+  #logEditDiagnostic(
+    stage: string,
+    context: Readonly<Record<string, unknown>>,
+    level: 'info' | 'warn' = 'info',
+  ): void {
+    this.#logger[level]('AntiEdit diagnostic', {
+      diagnostic: 'antiedit',
+      stage,
+      ...context,
+    });
+  }
+
   #protocolMessage(event: ZapoProtocolEventLike): ZapoProtocolEventLike['protocolMessage'] | undefined {
     if (event.protocolMessage) return event.protocolMessage;
 
@@ -993,10 +1083,15 @@ export class ZapoProvider implements WhatsAppProvider {
 
     const protocolKey = protocol.key;
     if (!protocolKey?.id) {
-      this.#logger.debug('Ignored Zapo protocol mutation without a target message id.', {
+      const context = {
         messageId: event.key.id ?? undefined,
         protocolType: protocol.type ?? undefined,
-      });
+      };
+      if (protocol.type === proto.Message.ProtocolMessage.Type.MESSAGE_EDIT) {
+        this.#logEditDiagnostic('dropped_protocol_without_target', context, 'warn');
+      } else {
+        this.#logger.debug('Ignored Zapo protocol mutation without a target message id.', context);
+      }
       return;
     }
 
@@ -1012,7 +1107,16 @@ export class ZapoProvider implements WhatsAppProvider {
 
     const stored = await this.#findStoredMessage(target);
     if (!target.remoteJid && stored?.key.remoteJid) target.remoteJid = stored.key.remoteJid;
-    if (!target.remoteJid) return;
+    if (!target.remoteJid) {
+      if (protocol.type === proto.Message.ProtocolMessage.Type.MESSAGE_EDIT) {
+        this.#logEditDiagnostic('dropped_edit_without_chat', {
+          eventMessageId: event.key.id ?? undefined,
+          targetMessageId: target.id ?? undefined,
+          previousRecovered: stored !== undefined,
+        }, 'warn');
+      }
+      return;
+    }
 
     const type = protocol.type;
     const mutationKey = this.#protocolDeliveryKey(event, target, type);
@@ -1053,7 +1157,13 @@ export class ZapoProvider implements WhatsAppProvider {
     const editedContent = protocol.editedMessage
       ? this.#unwrapEditedContent(protocol.editedMessage)
       : undefined;
-    if (!editedContent) return;
+    if (!editedContent) {
+      this.#logEditDiagnostic('dropped_edit_without_content', {
+        eventMessageId: event.key.id ?? undefined,
+        targetMessageId: target.id ?? undefined,
+      }, 'warn');
+      return;
+    }
 
     const pushName = event.pushName ?? stored?.pushName;
     const edited: StoredZapoMessage = {
@@ -1071,7 +1181,14 @@ export class ZapoProvider implements WhatsAppProvider {
     };
     const message = normalizeZapoMessage(edited);
 
-    if (!message) return;
+    if (!message) {
+      this.#logEditDiagnostic('dropped_edit_normalization_failed', {
+        eventMessageId: event.key.id ?? undefined,
+        targetMessageId: target.id ?? undefined,
+        previousRecovered: stored !== undefined,
+      }, 'warn');
+      return;
+    }
 
     const previous = stored ? normalizeZapoMessage(stored) : undefined;
     if (mutationKey) this.#rememberHandledProtocol(mutationKey);
@@ -1082,11 +1199,18 @@ export class ZapoProvider implements WhatsAppProvider {
       ?? (editedByMe ? this.getCurrentUserIds()[0] : event.key.remoteJid ?? undefined);
 
     if (!previous) {
-      this.#logger.debug('Zapo edit target was not present in the recent message cache.', {
+      this.#logEditDiagnostic('emitting_without_previous_message', {
         targetMessageId: target.id ?? undefined,
         chatId: target.remoteJid ?? undefined,
-      });
+      }, 'warn');
     }
+
+    this.#logEditDiagnostic('emitting_message_edited', {
+      eventMessageId: event.key.id ?? undefined,
+      targetMessageId: target.id ?? undefined,
+      previousRecovered: previous !== undefined,
+      editedByMe,
+    });
 
     void this.#events.emit('messageEdited', {
       key: message.keys,
@@ -2435,6 +2559,18 @@ class WhaNextZapoLogger implements ZapoLogger {
   }
 
   warn(message: string, context?: Readonly<Record<string, unknown>>): void {
+    if (
+      message.startsWith('addon parent message secret not found')
+      && context?.kind === 'message_edit'
+    ) {
+      this.#logger.warn('AntiEdit diagnostic', {
+        diagnostic: 'antiedit',
+        stage: 'decrypt_failed_missing_parent_secret',
+        ...this.#merge(context),
+      });
+      return;
+    }
+
     this.#logger.warn(message, this.#merge(context));
   }
 

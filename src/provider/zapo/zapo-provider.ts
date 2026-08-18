@@ -1098,7 +1098,7 @@ export class ZapoProvider implements WhatsAppProvider {
     const remoteJid = protocolKey.remoteJid ?? event.key.remoteJid;
     const participant = protocolKey.participant ?? event.key.participant;
     const participantAlt = protocolKey.participantAlt ?? event.key.participantAlt;
-    const target: ZapoMessageKeyLike = {
+    let target: ZapoMessageKeyLike = {
       ...protocolKey,
       ...(remoteJid !== undefined ? { remoteJid } : {}),
       ...(participant !== undefined ? { participant } : {}),
@@ -1106,6 +1106,7 @@ export class ZapoProvider implements WhatsAppProvider {
     };
 
     const stored = await this.#findStoredMessage(target);
+    if (stored) target = this.#targetKeyFromStoredMessage(target, stored.key);
     if (!target.remoteJid && stored?.key.remoteJid) target.remoteJid = stored.key.remoteJid;
     if (!target.remoteJid) {
       if (protocol.type === proto.Message.ProtocolMessage.Type.MESSAGE_EDIT) {
@@ -1227,6 +1228,29 @@ export class ZapoProvider implements WhatsAppProvider {
       editedMessage?: { message?: Proto.IMessage | null } | null;
     }).editedMessage;
     return wrapper?.message ?? message;
+  }
+
+  #targetKeyFromStoredMessage(
+    fallback: ZapoMessageKeyLike,
+    stored: ZapoMessageKeyLike,
+  ): ZapoMessageKeyLike {
+    const id = stored.id ?? fallback.id;
+    const remoteJid = stored.remoteJid ?? fallback.remoteJid;
+    const fromMe = stored.fromMe ?? fallback.fromMe;
+
+    return {
+      ...(id !== undefined ? { id } : {}),
+      ...(remoteJid !== undefined ? { remoteJid } : {}),
+      ...(stored.remoteJidAlt !== undefined ? { remoteJidAlt: stored.remoteJidAlt } : {}),
+      ...(fromMe !== undefined ? { fromMe } : {}),
+      ...(stored.participant !== undefined ? { participant: stored.participant } : {}),
+      ...(stored.participantAlt !== undefined
+        ? { participantAlt: stored.participantAlt }
+        : {}),
+      ...(stored.senderUsername !== undefined
+        ? { senderUsername: stored.senderUsername }
+        : {}),
+    };
   }
 
   #handleGroupEvent(event: ZapoGroupEventLike): void {
@@ -1894,12 +1918,12 @@ export class ZapoProvider implements WhatsAppProvider {
       const archivedChatId = stringValue(archived.chat_id);
       const remoteJid = key.remoteJid ?? archivedChatId;
       if (!remoteJid) return undefined;
-      const participant = key.participant
-        ?? key.participantAlt
-        ?? stringValue(archived.participant_id);
+      const participant = stringValue(archived.participant_id)
+        ?? key.participant
+        ?? key.participantAlt;
       const archivedFromMe = booleanValue(archived.from_me);
       const timestampSeconds = numberValue(archived.timestamp_seconds);
-      const fromMe = key.fromMe ?? archivedFromMe;
+      const fromMe = archivedFromMe ?? key.fromMe;
       const restored: StoredZapoMessage = {
         key: {
           ...key,

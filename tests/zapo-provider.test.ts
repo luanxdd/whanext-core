@@ -1157,6 +1157,117 @@ describe('ZapoProvider', () => {
     expect(serialized).not.toContain('conteúdo editado sensível');
   });
 
+  it('preserves the original group author when an edit addon carries account identities', async () => {
+    const { provider, client: current } = await connectedProvider();
+    current.credentials.meJid = '5511000000000@s.whatsapp.net';
+    current.credentials.meLid = '100@lid';
+    const edits: any[] = [];
+    provider.on('messageEdited', (event) => {
+      edits.push(event);
+    });
+    const now = Math.floor(Date.now() / 1_000);
+
+    current.emit('message', {
+      key: {
+        id: 'foreign-group-target',
+        remoteJid: '123@g.us',
+        fromMe: false,
+        participant: '200@lid',
+        participantAlt: '5522000000000@s.whatsapp.net',
+      },
+      message: { conversation: 'mensagem de outra conta' },
+      timestampSeconds: now,
+    });
+    current.emit('message_addon', {
+      key: {
+        id: 'foreign-group-edit',
+        remoteJid: '123@g.us',
+        fromMe: false,
+        participant: '100@lid',
+        participantAlt: '5511000000000@s.whatsapp.net',
+      },
+      kind: 'message_edit',
+      targetMessageId: 'foreign-group-target',
+      decrypted: {
+        kind: 'message_edit',
+        message: { conversation: 'editada por outra conta' },
+      },
+      raw: {},
+    });
+    await flushAsync();
+
+    expect(edits).toHaveLength(1);
+    expect(edits[0].previous.senderIds).toEqual([
+      '200@lid',
+      '5522000000000@s.whatsapp.net',
+    ]);
+    expect(edits[0].message.senderIds).toEqual([
+      '200@lid',
+      '5522000000000@s.whatsapp.net',
+    ]);
+    expect(edits[0].message.keys).toMatchObject({
+      fromMe: false,
+      participantId: '200@lid',
+    });
+  });
+
+  it('preserves the archived group author after the original leaves memory', async () => {
+    const { provider, client: current } = await connectedProvider({
+      auth: './session-antiedit-archived-author',
+      browser: Browser.Windows,
+      messageCacheSize: 1,
+    });
+    const edits: any[] = [];
+    provider.on('messageEdited', (event) => {
+      edits.push(event);
+    });
+    const now = Math.floor(Date.now() / 1_000);
+
+    current.emit('message', {
+      key: {
+        id: 'archived-foreign-target',
+        remoteJid: '123@g.us',
+        fromMe: false,
+        participant: '200@lid',
+      },
+      message: { conversation: 'mensagem arquivada de outra conta' },
+      timestampSeconds: now,
+    });
+    await flushAsync();
+    current.emit('message', {
+      key: {
+        id: 'archive-cache-evictor',
+        remoteJid: '123@g.us',
+        fromMe: false,
+        participant: '300@lid',
+      },
+      message: { conversation: 'remove a original da memória' },
+      timestampSeconds: now,
+    });
+    await flushAsync();
+    current.emit('message_addon', {
+      key: {
+        id: 'archived-foreign-edit',
+        remoteJid: '123@g.us',
+        fromMe: false,
+        participant: '100@lid',
+      },
+      kind: 'message_edit',
+      targetMessageId: 'archived-foreign-target',
+      decrypted: {
+        kind: 'message_edit',
+        message: { conversation: 'edição da mensagem arquivada' },
+      },
+      raw: {},
+    });
+    await flushAsync();
+
+    expect(edits).toHaveLength(1);
+    expect(edits[0].previous.senderIds).toEqual(['200@lid']);
+    expect(edits[0].message.senderIds).toEqual(['200@lid']);
+    expect(edits[0].message.keys.participantId).toBe('200@lid');
+  });
+
   it('treats a live edit addon as live even when its parent timestamp predates the connection', async () => {
     const { provider, client: current } = await connectedProvider();
     const edits: Array<{ previous?: string; current?: string }> = [];

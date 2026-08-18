@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.19.13
+
+- Group edits now preserve the original message author's participant identities instead of replacing them with identities carried by the edit-addon envelope.
+- Archived mutation recovery now prefers the original stored participant and `fromMe` values over fallback mutation metadata.
+- Fixed external edits being incorrectly classified as owner edits in multi-account/group sessions.
+
 ## 0.19.12
 
 - Added end-to-end AntiEdit diagnostics for encrypted addons, protocol events, direct edit envelopes, normalization, previous-message recovery, and final `messageEdited` emission.

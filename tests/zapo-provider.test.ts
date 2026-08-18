@@ -6,7 +6,6 @@ import {
   vi,
 } from 'vitest';
 import { Browser } from '@/auth/browser.js';
-import { Logger, type LogEntry } from '@/logger/logger.js';
 import { ZapoProvider } from '@/provider/zapo/zapo-provider.js';
 
 const { mocks, MockClient } = vi.hoisted(() => {
@@ -159,11 +158,6 @@ vi.mock('zapo-js', () => ({
         Type: {
           REVOKE: 0,
           MESSAGE_EDIT: 14,
-        },
-      },
-      SecretEncryptedMessage: {
-        SecretEncType: {
-          MESSAGE_EDIT: 2,
         },
       },
       ListMessage: {
@@ -1099,62 +1093,6 @@ describe('ZapoProvider', () => {
       previous: 'antes secreto',
       current: 'depois secreto',
     }]);
-  });
-
-  it('reports every AntiEdit stage without logging message content', async () => {
-    const entries: LogEntry[] = [];
-    const logger = new Logger({
-      level: 'info',
-      writer: (entry) => entries.push(entry),
-    });
-    const { provider, client: current } = await connectedProvider({
-      auth: './session-antiedit-diagnostic',
-      browser: Browser.Windows,
-      logger,
-    });
-    const now = Math.floor(Date.now() / 1_000);
-
-    current.emit('message', {
-      key: { id: 'diagnostic-target', remoteJid: '5511@s.whatsapp.net', fromMe: false },
-      message: { conversation: 'conteúdo original sensível' },
-      timestampSeconds: now,
-    });
-    current.emit('message', {
-      key: { id: 'diagnostic-addon', remoteJid: '5511@s.whatsapp.net', fromMe: false },
-      message: {
-        secretEncryptedMessage: {
-          secretEncType: 2,
-          targetMessageKey: { id: 'diagnostic-target', fromMe: false },
-        },
-      },
-      timestampSeconds: now,
-    });
-    (current.logger as { warn(message: string, context: Record<string, unknown>): void }).warn(
-      'addon parent message secret not found - enable the `messages` mailbox',
-      { id: 'diagnostic-addon', targetId: 'diagnostic-target', kind: 'message_edit' },
-    );
-    current.emit('message_addon', {
-      key: { id: 'diagnostic-addon', remoteJid: '5511@s.whatsapp.net', fromMe: false },
-      kind: 'message_edit',
-      targetMessageId: 'diagnostic-target',
-      decrypted: { kind: 'message_edit', message: { conversation: 'conteúdo editado sensível' } },
-      raw: {},
-    });
-    await flushAsync();
-
-    const stages = entries
-      .filter((entry) => entry.context.diagnostic === 'antiedit')
-      .map((entry) => entry.context.stage);
-    const serialized = JSON.stringify(entries);
-
-    expect(stages).toEqual(expect.arrayContaining([
-      'received_encrypted_addon',
-      'decrypt_failed_missing_parent_secret',
-      'received_decrypted_addon',
-      'emitting_message_edited',
-    ]));
-    expect(serialized).not.toContain('conteúdo original sensível');
-    expect(serialized).not.toContain('conteúdo editado sensível');
   });
 
   it('preserves the original group author when an edit addon carries account identities', async () => {

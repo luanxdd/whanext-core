@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.19.14
+
+- Removed the temporary end-to-end AntiEdit diagnostic instrumentation after confirming the group-author identity fix in production.
+- Normal edit handling remains quiet apart from the existing standard error and recovery logs.
+
 ## 0.19.13
 
 - Group edits now preserve the original message author's participant identities instead of replacing them with identities carried by the edit-addon envelope.

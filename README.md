@@ -356,7 +356,26 @@ app.on('message', async (message) => {
 });
 ```
 
-Os valores disponíveis são `text`, `image`, `video`, `audio`, `document`, `sticker`, `location`, `contact`, `poll`, `catalog` e `unknown`. Para mídia baixável, continue usando `message.media.kind`.
+Os valores disponíveis são `text`, `image`, `video`, `audio`, `document`, `sticker`, `location`, `contact`, `poll`, `catalog`, `payment` e `unknown`. Para mídia baixável, continue usando `message.media.kind`.
+
+Para moderação de payloads especiais, o provider Zapo também expõe duas classificações opcionais:
+
+- `message.protocolKinds`: nomes reais do protocolo reconhecidos no `Proto.IMessage`, sem expor o objeto protobuf bruto.
+- `message.payloadKinds`: categorias estáveis do WhaNext: `catalog_message`, `payment_payload`, `group_status_payload`, `payment_info_embedded`, `native_flow_crash` e `malformed_payload`.
+
+Um filtro de pagamentos pode cobrir tanto mensagens de pagamento do protocolo quanto os cards PIX/cobrança em native-flow:
+
+```ts
+app.on('message', async (message) => {
+  if (message.contentKind === 'payment' && message.isGroup) {
+    await app.message.delete(message);
+  }
+});
+```
+
+Os wrappers `groupStatusMessage`, `groupStatusMessageV2`, `groupStatusMentionMessage` e `groupMentionedMessage` são desembrulhados antes da classificação normal. Por exemplo, uma imagem dentro de `groupStatusMessageV2` continua com `contentKind === 'image'`, enquanto `payloadKinds` inclui `group_status_payload` e `protocolKinds` preserva o wrapper detectado.
+
+`catalog_message` normaliza `productMessage` e `orderMessage`. `payment_info_embedded` cobre os flows `payment_info` e `review_and_pay`. `native_flow_crash` e `malformed_payload` são sinais defensivos do WhaNext, não nomes de campos do protocolo Zapo.
 
 ```ts
 app.on('message', async (message) => {

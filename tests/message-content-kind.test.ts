@@ -257,4 +257,178 @@ describe('Zapo message content classification', () => {
       },
     });
   });
+
+  it.each([
+    'sendPaymentMessage',
+    'requestPaymentMessage',
+    'paymentInviteMessage',
+    'cancelPaymentRequestMessage',
+    'declinePaymentRequestMessage',
+    'invoiceMessage',
+    'paymentReminderMessage',
+    'splitPaymentMessage',
+    'splitPaymentUpdateMessage',
+  ] as const)('exposes %s as a payment payload', (protocolKind) => {
+    const message = normalizeZapoMessage(createMessage({
+      [protocolKind]: {},
+    }));
+
+    expect(message).toMatchObject({
+      contentKind: 'payment',
+      protocolKinds: [protocolKind],
+      payloadKinds: ['payment_payload'],
+    });
+  });
+
+  it.each([
+    'groupStatusMessage',
+    'groupStatusMessageV2',
+    'groupStatusMentionMessage',
+    'groupMentionedMessage',
+  ] as const)('unwraps %s and preserves the protocol signal', (protocolKind) => {
+    const message = normalizeZapoMessage(createMessage({
+      [protocolKind]: {
+        message: {
+          conversation: 'status do grupo',
+        },
+      },
+    }));
+
+    expect(message).toMatchObject({
+      contentKind: 'text',
+      text: 'status do grupo',
+      protocolKinds: [protocolKind],
+      payloadKinds: ['group_status_payload'],
+    });
+  });
+
+  it('preserves nested group status and payment signals together', () => {
+    const message = normalizeZapoMessage(createMessage({
+      groupStatusMessageV2: {
+        message: {
+          requestPaymentMessage: {
+            currencyCodeIso4217: 'BRL',
+            amount1000: 1000,
+          },
+        },
+      },
+    }));
+
+    expect(message?.contentKind).toBe('payment');
+    expect(message?.protocolKinds).toEqual([
+      'groupStatusMessageV2',
+      'requestPaymentMessage',
+    ]);
+    expect(message?.payloadKinds).toEqual([
+      'group_status_payload',
+      'payment_payload',
+    ]);
+  });
+
+  it.each([
+    'productMessage',
+    'orderMessage',
+  ] as const)('exposes %s as catalog_message', (protocolKind) => {
+    const message = normalizeZapoMessage(createMessage({
+      [protocolKind]: {},
+    }));
+
+    expect(message?.protocolKinds).toEqual([protocolKind]);
+    expect(message?.payloadKinds).toEqual(['catalog_message']);
+    expect(message?.contentKind).toBe('catalog');
+  });
+
+  it.each([
+    'payment_info',
+    'review_and_pay',
+  ] as const)('detects embedded native-flow payment card %s', (name) => {
+    const message = normalizeZapoMessage(createMessage({
+      interactiveMessage: {
+        body: { text: 'Pagamento' },
+        nativeFlowMessage: {
+          messageVersion: 1,
+          buttons: [{
+            name,
+            buttonParamsJson: JSON.stringify({
+              currency: 'BRL',
+              reference_id: 'PAY-1',
+            }),
+          }],
+        },
+      },
+    }));
+
+    expect(message).toMatchObject({
+      contentKind: 'payment',
+      text: 'Pagamento',
+      payloadKinds: ['payment_info_embedded'],
+    });
+  });
+
+  it('exposes payment classification on quoted messages', () => {
+    const message = normalizeZapoMessage(createMessage({
+      extendedTextMessage: {
+        text: 'reply',
+        contextInfo: {
+          stanzaId: 'quoted-payment-id',
+          participant: '5511888888888@s.whatsapp.net',
+          quotedMessage: {
+            requestPaymentMessage: {
+              currencyCodeIso4217: 'BRL',
+              amount1000: 5000,
+            },
+          },
+        },
+      },
+    }));
+
+    expect(message?.quoted).toMatchObject({
+      contentKind: 'payment',
+      protocolKinds: ['requestPaymentMessage'],
+      payloadKinds: ['payment_payload'],
+    });
+  });
+
+  it('marks malformed native-flow JSON without throwing', () => {
+    const message = normalizeZapoMessage(createMessage({
+      interactiveResponseMessage: {
+        nativeFlowResponseMessage: {
+          name: 'quick_reply',
+          paramsJson: '{not-json',
+        },
+      },
+    }));
+
+    expect(message?.contentKind).toBe('text');
+    expect(message?.payloadKinds).toEqual(['malformed_payload']);
+  });
+
+  it('marks oversized native-flow JSON as a crash-risk malformed payload', () => {
+    const message = normalizeZapoMessage(createMessage({
+      interactiveResponseMessage: {
+        nativeFlowResponseMessage: {
+          name: 'quick_reply',
+          paramsJson: JSON.stringify({ data: 'x'.repeat(128 * 1024) }),
+        },
+      },
+    }));
+
+    expect(message?.payloadKinds).toEqual([
+      'native_flow_crash',
+      'malformed_payload',
+    ]);
+  });
+
+  it('marks an empty group status future-proof wrapper as malformed', () => {
+    const message = normalizeZapoMessage(createMessage({
+      groupStatusMessage: {},
+    }));
+
+    expect(message).toMatchObject({
+      contentKind: 'unknown',
+      protocolKinds: ['groupStatusMessage'],
+      payloadKinds: ['group_status_payload', 'malformed_payload'],
+    });
+  });
+
 });

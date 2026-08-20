@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.19.15
+
+### Added
+- Added provider-safe payload classification through `message.protocolKinds` and `message.payloadKinds`, also available on quoted messages.
+- Added `payment` to `MessageContentKind` for WhatsApp payment payloads and native-flow payment cards.
+- Added Zapo 1.7.1 payment coverage for `sendPaymentMessage`, `requestPaymentMessage`, `paymentInviteMessage`, `cancelPaymentRequestMessage`, `declinePaymentRequestMessage`, `invoiceMessage`, `paymentReminderMessage`, `splitPaymentMessage`, and `splitPaymentUpdateMessage`.
+- Added group-status wrapper coverage for `groupStatusMessage`, `groupStatusMessageV2`, `groupStatusMentionMessage`, and `groupMentionedMessage` while preserving the nested content classification.
+- Added `catalog_message` classification for Zapo `productMessage` and `orderMessage` payloads.
+- Added native-flow payment detection for the documented `payment_info` and `review_and_pay` flows.
+- Added defensive `malformed_payload` and `native_flow_crash` signals for invalid or structurally unsafe native-flow JSON without exposing raw provider payloads to consumers.
+
+### Compatibility
+- Existing `contentKind` consumers remain compatible; the new protocol/payload arrays are optional.
+- `groupStatus*` and `groupMentionedMessage` are unwrapped as Zapo `FutureProofMessage` containers so text/media inside them continues through the regular normalizer.
+
 ## 0.19.14
 
 - Removed the temporary end-to-end AntiEdit diagnostic instrumentation after confirming the group-author identity fix in production.

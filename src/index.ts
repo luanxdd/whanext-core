@@ -137,6 +137,8 @@ export type {
   ImageContent,
   MediaKind,
   MessageContentKind,
+  MessagePayloadKind,
+  MessageProtocolKind,
   MediaSource,
   MentionTarget,
   MessageButton,

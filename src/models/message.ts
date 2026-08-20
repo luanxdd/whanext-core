@@ -32,7 +32,33 @@ export type MessageContentKind =
   | 'contact'
   | 'poll'
   | 'catalog'
+  | 'payment'
   | 'unknown';
+
+export type MessageProtocolKind =
+  | 'groupStatusMessage'
+  | 'groupStatusMessageV2'
+  | 'groupStatusMentionMessage'
+  | 'groupMentionedMessage'
+  | 'productMessage'
+  | 'orderMessage'
+  | 'sendPaymentMessage'
+  | 'requestPaymentMessage'
+  | 'paymentInviteMessage'
+  | 'cancelPaymentRequestMessage'
+  | 'declinePaymentRequestMessage'
+  | 'invoiceMessage'
+  | 'paymentReminderMessage'
+  | 'splitPaymentMessage'
+  | 'splitPaymentUpdateMessage';
+
+export type MessagePayloadKind =
+  | 'catalog_message'
+  | 'payment_payload'
+  | 'group_status_payload'
+  | 'payment_info_embedded'
+  | 'native_flow_crash'
+  | 'malformed_payload';
 
 export interface MessageMedia {
   kind: MediaKind;
@@ -50,6 +76,8 @@ export interface QuotedMessage {
   hasMedia: boolean;
   isViewOnce?: boolean;
   contentKind?: MessageContentKind;
+  protocolKinds?: MessageProtocolKind[];
+  payloadKinds?: MessagePayloadKind[];
   media?: MessageMedia;
 }
 
@@ -99,6 +127,8 @@ export interface Message {
   isViewOnce: boolean;
   hasMedia: boolean;
   contentKind?: MessageContentKind;
+  protocolKinds?: MessageProtocolKind[];
+  payloadKinds?: MessagePayloadKind[];
   media?: MessageMedia;
   quoted?: QuotedMessage;
   interactive?: InteractiveResponse;

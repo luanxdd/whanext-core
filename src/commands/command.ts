@@ -3,8 +3,18 @@ import type { CommandContext } from '@/commands/context.js';
 import type { CommandGuard } from '@/commands/guards.js';
 import type { CommandOptionSchema } from '@/commands/options.js';
 
-export type CommandScope = 'global' | 'user' | 'chat' | 'user-chat' | 'user-group';
-export type ConcurrencyStrategy = 'parallel' | 'reject' | 'queue' | 'replace';
+export type CommandScope = 
+  | "global" 
+  | "user" 
+  | "chat" 
+  | "user-chat" 
+  | "user-group"
+
+export type ConcurrencyStrategy = 
+  | "parallel" 
+  | "reject" 
+  | "queue" 
+  | "replace"
 
 export interface CommandCooldown {
   durationMs: number;

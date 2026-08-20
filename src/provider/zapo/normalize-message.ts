@@ -5,6 +5,8 @@ import type {
   MediaKind,
   Message,
   MessageContentKind,
+  MessagePayloadKind,
+  MessageProtocolKind,
   MessageKey,
   MessageMedia,
   QuotedMessage,
@@ -41,6 +43,44 @@ interface LongLike {
   low?: number;
 }
 
+const GROUP_STATUS_PROTOCOL_KINDS = [
+  'groupStatusMessage',
+  'groupStatusMessageV2',
+  'groupStatusMentionMessage',
+  'groupMentionedMessage',
+] as const satisfies readonly MessageProtocolKind[];
+
+const PAYMENT_PROTOCOL_KINDS = [
+  'sendPaymentMessage',
+  'requestPaymentMessage',
+  'paymentInviteMessage',
+  'cancelPaymentRequestMessage',
+  'declinePaymentRequestMessage',
+  'invoiceMessage',
+  'paymentReminderMessage',
+  'splitPaymentMessage',
+  'splitPaymentUpdateMessage',
+] as const satisfies readonly MessageProtocolKind[];
+
+const CATALOG_PROTOCOL_KINDS = [
+  'productMessage',
+  'orderMessage',
+] as const satisfies readonly MessageProtocolKind[];
+
+const NATIVE_FLOW_PAYMENT_NAMES = new Set([
+  'payment_info',
+  'review_and_pay',
+]);
+
+const MAX_NATIVE_FLOW_JSON_BYTES = 128 * 1024;
+const MAX_NATIVE_FLOW_DEPTH = 32;
+const MAX_NATIVE_FLOW_NODES = 4096;
+
+interface PayloadInspection {
+  protocolKinds: MessageProtocolKind[];
+  payloadKinds: MessagePayloadKind[];
+}
+
 export function unwrapZapoMessageContent(
   input: Proto.IMessage | null | undefined,
 ): Proto.IMessage | undefined {
@@ -52,7 +92,11 @@ export function unwrapZapoMessageContent(
     ?? viewOnceV2ExtensionMessage(input)
     ?? input.deviceSentMessage?.message
     ?? input.documentWithCaptionMessage?.message
-    ?? editedWrapperMessage(input);
+    ?? editedWrapperMessage(input)
+    ?? futureProofMessage(input, 'groupStatusMessage')
+    ?? futureProofMessage(input, 'groupStatusMessageV2')
+    ?? futureProofMessage(input, 'groupStatusMentionMessage')
+    ?? futureProofMessage(input, 'groupMentionedMessage');
 
   return nested ? unwrapZapoMessageContent(nested) : input;
 }
@@ -79,6 +123,14 @@ function viewOnceV2ExtensionMessage(
   return extension?.message ?? undefined;
 }
 
+function futureProofMessage(
+  input: Proto.IMessage,
+  key: 'groupStatusMessage' | 'groupStatusMessageV2' | 'groupStatusMentionMessage' | 'groupMentionedMessage',
+): Proto.IMessage | undefined {
+  const wrapper = input[key] as { message?: Proto.IMessage | null } | null | undefined;
+  return wrapper?.message ?? undefined;
+}
+
 export function isZapoViewOnceContent(
   input: Proto.IMessage | null | undefined,
 ): boolean {
@@ -95,7 +147,11 @@ export function isZapoViewOnceContent(
   const nested = input.ephemeralMessage?.message
     ?? input.deviceSentMessage?.message
     ?? input.documentWithCaptionMessage?.message
-    ?? editedWrapperMessage(input);
+    ?? editedWrapperMessage(input)
+    ?? futureProofMessage(input, 'groupStatusMessage')
+    ?? futureProofMessage(input, 'groupStatusMessageV2')
+    ?? futureProofMessage(input, 'groupStatusMentionMessage')
+    ?? futureProofMessage(input, 'groupMentionedMessage');
 
   return nested ? isZapoViewOnceContent(nested) : false;
 }
@@ -136,6 +192,7 @@ export function normalizeZapoMessage(
     return undefined;
   }
 
+  const payloadInspection = inspectZapoPayload(event.message);
   const content = unwrapZapoMessageContent(event.message);
 
   if (!content) {
@@ -167,7 +224,10 @@ export function normalizeZapoMessage(
   const mentionedUsers = mentionedIds.map((identity) => User.fromIdentities([identity]));
   const viewOnce = isZapoViewOnceContent(event.message);
   const media = getMedia(type, node, viewOnce);
-  const contentKind = getContentKind(type);
+  const contentKind = payloadInspection.payloadKinds.includes('payment_payload')
+    || payloadInspection.payloadKinds.includes('payment_info_embedded')
+    ? 'payment'
+    : getContentKind(type);
   const text = getText(content);
   const caption = getCaption(content);
   const quoted = getQuoted(context, chatId);
@@ -190,6 +250,13 @@ export function normalizeZapoMessage(
     hasMedia: media !== undefined,
     contentKind,
   };
+
+  if (payloadInspection.protocolKinds.length > 0) {
+    message.protocolKinds = payloadInspection.protocolKinds;
+  }
+  if (payloadInspection.payloadKinds.length > 0) {
+    message.payloadKinds = payloadInspection.payloadKinds;
+  }
 
   if (senderJid !== undefined) message.senderJid = senderJid;
   if (senderLid !== undefined) {
@@ -220,6 +287,192 @@ export function normalizeZapoKey(key: ZapoMessageKeyLike): MessageKey {
   return normalized;
 }
 
+function inspectZapoPayload(
+  input: Proto.IMessage | null | undefined,
+): PayloadInspection {
+  const protocolKinds = new Set<MessageProtocolKind>();
+  const payloadKinds = new Set<MessagePayloadKind>();
+
+  inspectMessageLayer(input, protocolKinds, payloadKinds, 0);
+
+  return {
+    protocolKinds: [...protocolKinds],
+    payloadKinds: [...payloadKinds],
+  };
+}
+
+function inspectMessageLayer(
+  input: Proto.IMessage | null | undefined,
+  protocolKinds: Set<MessageProtocolKind>,
+  payloadKinds: Set<MessagePayloadKind>,
+  depth: number,
+): void {
+  if (!input) return;
+  if (depth > 16) {
+    payloadKinds.add('malformed_payload');
+    return;
+  }
+
+  for (const kind of GROUP_STATUS_PROTOCOL_KINDS) {
+    if (input[kind] !== null && input[kind] !== undefined) {
+      protocolKinds.add(kind);
+      payloadKinds.add('group_status_payload');
+      if (!futureProofMessage(input, kind)) payloadKinds.add('malformed_payload');
+    }
+  }
+
+  for (const kind of PAYMENT_PROTOCOL_KINDS) {
+    if (input[kind] !== null && input[kind] !== undefined) {
+      protocolKinds.add(kind);
+      payloadKinds.add('payment_payload');
+    }
+  }
+
+  for (const kind of CATALOG_PROTOCOL_KINDS) {
+    if (input[kind] !== null && input[kind] !== undefined) {
+      protocolKinds.add(kind);
+      payloadKinds.add('catalog_message');
+    }
+  }
+
+  inspectNativeFlow(input, payloadKinds);
+
+  for (const nested of wrappedMessages(input)) {
+    inspectMessageLayer(nested, protocolKinds, payloadKinds, depth + 1);
+  }
+}
+
+function wrappedMessages(input: Proto.IMessage): Proto.IMessage[] {
+  const messages = [
+    input.ephemeralMessage?.message,
+    input.viewOnceMessage?.message,
+    input.viewOnceMessageV2?.message,
+    viewOnceV2ExtensionMessage(input),
+    input.deviceSentMessage?.message,
+    input.documentWithCaptionMessage?.message,
+    editedWrapperMessage(input),
+    futureProofMessage(input, 'groupStatusMessage'),
+    futureProofMessage(input, 'groupStatusMessageV2'),
+    futureProofMessage(input, 'groupStatusMentionMessage'),
+    futureProofMessage(input, 'groupMentionedMessage'),
+  ];
+
+  return messages.filter((message): message is Proto.IMessage => message !== null && message !== undefined);
+}
+
+function inspectNativeFlow(
+  input: Proto.IMessage,
+  payloadKinds: Set<MessagePayloadKind>,
+): void {
+  const interactive = input.interactiveMessage as {
+    nativeFlowMessage?: {
+      messageParamsJson?: string | null;
+      buttons?: Array<{
+        name?: string | null;
+        buttonParamsJson?: string | null;
+      }> | null;
+    } | null;
+  } | null | undefined;
+  const nativeFlow = interactive?.nativeFlowMessage;
+
+  if (nativeFlow) {
+    inspectNativeFlowJson(nativeFlow.messageParamsJson, payloadKinds);
+
+    for (const button of nativeFlow.buttons ?? []) {
+      if (button.name && NATIVE_FLOW_PAYMENT_NAMES.has(button.name)) {
+        payloadKinds.add('payment_info_embedded');
+      }
+      inspectNativeFlowJson(button.buttonParamsJson, payloadKinds);
+    }
+  }
+
+  const response = input.interactiveResponseMessage as {
+    nativeFlowResponseMessage?: {
+      name?: string | null;
+      paramsJson?: string | null;
+    } | null;
+  } | null | undefined;
+  const nativeResponse = response?.nativeFlowResponseMessage;
+
+  if (nativeResponse?.name && NATIVE_FLOW_PAYMENT_NAMES.has(nativeResponse.name)) {
+    payloadKinds.add('payment_info_embedded');
+  }
+  inspectNativeFlowJson(nativeResponse?.paramsJson, payloadKinds);
+
+  const buttonsMessage = input.buttonsMessage as {
+    buttons?: Array<{
+      nativeFlowInfo?: {
+        name?: string | null;
+        paramsJson?: string | null;
+      } | null;
+    }> | null;
+  } | null | undefined;
+
+  for (const button of buttonsMessage?.buttons ?? []) {
+    const flow = button.nativeFlowInfo;
+    if (flow?.name && NATIVE_FLOW_PAYMENT_NAMES.has(flow.name)) {
+      payloadKinds.add('payment_info_embedded');
+    }
+    inspectNativeFlowJson(flow?.paramsJson, payloadKinds);
+  }
+}
+
+function inspectNativeFlowJson(
+  json: string | null | undefined,
+  payloadKinds: Set<MessagePayloadKind>,
+): void {
+  if (!json) return;
+
+  if (Buffer.byteLength(json, 'utf8') > MAX_NATIVE_FLOW_JSON_BYTES) {
+    payloadKinds.add('native_flow_crash');
+    payloadKinds.add('malformed_payload');
+    return;
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(json) as unknown;
+  } catch {
+    payloadKinds.add('malformed_payload');
+    return;
+  }
+
+  if (!isSafeNativeFlowJson(parsed)) {
+    payloadKinds.add('native_flow_crash');
+    payloadKinds.add('malformed_payload');
+  }
+}
+
+function isSafeNativeFlowJson(root: unknown): boolean {
+  const queue: Array<{ value: unknown; depth: number }> = [{ value: root, depth: 0 }];
+  let nodes = 0;
+
+  while (queue.length > 0) {
+    const current = queue.shift();
+    if (!current) break;
+    nodes += 1;
+
+    if (nodes > MAX_NATIVE_FLOW_NODES || current.depth > MAX_NATIVE_FLOW_DEPTH) {
+      return false;
+    }
+
+    if (Array.isArray(current.value)) {
+      for (const value of current.value) {
+        queue.push({ value, depth: current.depth + 1 });
+      }
+      continue;
+    }
+
+    if (typeof current.value === 'object' && current.value !== null) {
+      for (const value of Object.values(current.value as Record<string, unknown>)) {
+        queue.push({ value, depth: current.depth + 1 });
+      }
+    }
+  }
+
+  return true;
+}
+
 function contentNode(content: Proto.IMessage): {
   type: keyof Proto.IMessage | undefined;
   node: unknown;
@@ -245,6 +498,7 @@ function contentNode(content: Proto.IMessage): {
     'pollCreationMessageV5',
     'productMessage',
     'orderMessage',
+    'interactiveMessage',
     'interactiveResponseMessage',
   ];
 
@@ -259,6 +513,7 @@ function getContentKind(type: keyof Proto.IMessage | undefined): MessageContentK
     case 'buttonsResponseMessage':
     case 'listResponseMessage':
     case 'templateButtonReplyMessage':
+    case 'interactiveMessage':
     case 'interactiveResponseMessage':
       return 'text';
     case 'imageMessage':
@@ -300,8 +555,17 @@ function getText(content: Proto.IMessage): string | undefined {
     ?? content.pollCreationMessageV2?.name
     ?? content.pollCreationMessageV3?.name
     ?? content.pollCreationMessageV5?.name
+    ?? interactiveMessageBodyText(content)
     ?? getNativeFlowDisplayText(content)
     ?? undefined;
+}
+
+function interactiveMessageBodyText(content: Proto.IMessage): string | undefined {
+  const interactive = content.interactiveMessage as {
+    body?: { text?: string | null } | null;
+  } | null | undefined;
+
+  return interactive?.body?.text ?? undefined;
 }
 
 function getInteractiveResponse(content: Proto.IMessage): InteractiveResponse | undefined {
@@ -359,7 +623,6 @@ function getInteractiveResponse(content: Proto.IMessage): InteractiveResponse | 
 
   return undefined;
 }
-
 
 function nativeFlowName(content: Proto.IMessage): string | undefined {
   const response = content.interactiveResponseMessage as {
@@ -465,6 +728,7 @@ function getQuoted(
 ): QuotedMessage | undefined {
   if (!context?.stanzaId || !context.quotedMessage) return undefined;
 
+  const payloadInspection = inspectZapoPayload(context.quotedMessage);
   const content = unwrapZapoMessageContent(context.quotedMessage);
   if (!content) return undefined;
 
@@ -480,8 +744,17 @@ function getQuoted(
     },
     hasMedia: media !== undefined,
     isViewOnce: media?.viewOnce ?? false,
-    contentKind: getContentKind(type),
+    contentKind: payloadInspection.payloadKinds.includes('payment_payload')
+      || payloadInspection.payloadKinds.includes('payment_info_embedded')
+      ? 'payment'
+      : getContentKind(type),
   };
+  if (payloadInspection.protocolKinds.length > 0) {
+    quoted.protocolKinds = payloadInspection.protocolKinds;
+  }
+  if (payloadInspection.payloadKinds.length > 0) {
+    quoted.payloadKinds = payloadInspection.payloadKinds;
+  }
   const text = getText(content) ?? getCaption(content);
 
   if (text !== undefined) quoted.text = text;

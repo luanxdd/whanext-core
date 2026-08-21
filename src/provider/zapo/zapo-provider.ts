@@ -40,10 +40,14 @@ import type {
 } from '@/models/message.js';
 import { TypedEventEmitter } from '@/provider/event-emitter.js';
 import type {
+  ConnectionState,
+  CryptoAccelerationBackend,
+  CryptoDegradationKind,
   ParticipantAction,
   ParticipantUpdateResult,
   PresenceState,
   ProviderEvents,
+  ProviderHealth,
   WhatsAppProvider,
 } from '@/provider/provider.js';
 import {
@@ -61,6 +65,8 @@ export interface ZapoProviderOptions {
   messageCacheSize?: number;
   sessionId?: string;
   processOfflineMessages?: boolean;
+  connectTimeoutMs?: number;
+  nodeQueryTimeoutMs?: number;
   reconnect?: {
     enabled?: boolean;
     maxAttempts?: number;
@@ -131,6 +137,13 @@ const fatalDisconnectReasons = new Set([
 const fatalDisconnectCodes = new Set([401, 403, 405, 406, 409, 516]);
 const sharedMediaProcessor = createMediaProcessor();
 const REMOTE_MEDIA_TIMEOUT_MS = 120_000;
+const DEFAULT_CONNECT_TIMEOUT_MS = 15_000;
+const DEFAULT_NODE_QUERY_TIMEOUT_MS = 30_000;
+const PROVIDER_DEGRADED_WINDOW_MS = 120_000;
+const GROUP_METADATA_CACHE_TTL_MS = 180_000;
+const DEVICE_LIST_CACHE_TTL_MS = 180_000;
+const GROUP_METADATA_RECOVERY_COOLDOWN_MS = 60_000;
+const GROUP_METADATA_MISMATCH_WARNING = 'group message publish acknowledged with mismatch metadata';
 const messageSnapshotRetentionSeconds = 7 * 24 * 60 * 60;
 const messageSnapshotMaxPerSession = 20_000;
 const messageSnapshotPruneInterval = 256;
@@ -246,8 +259,14 @@ export class ZapoProvider implements WhatsAppProvider {
   readonly #deliveredMessageStore = new Set<string>();
   readonly #handledProtocolStore = new Set<string>();
   readonly #callCreatorStore = new Map<string, string>();
+  readonly #groupMetadataRecoveryAt = new Map<string, number>();
+  readonly #groupMetadataRecoveryInFlight = new Set<string>();
   readonly #messageCacheSize: number;
+  readonly #cryptoBackend: CryptoAccelerationBackend;
+  readonly #connectTimeoutMs: number;
+  readonly #nodeQueryTimeoutMs: number;
   #protocolMutationQueue: Promise<void> = Promise.resolve();
+  #state: ConnectionState = 'idle';
   #client: WaClient | undefined;
   #storeEntry: SharedZapoStoreEntry | undefined;
   #storePath: string | undefined;
@@ -262,11 +281,31 @@ export class ZapoProvider implements WhatsAppProvider {
   #messageSnapshotsSincePrune = 0;
   #pairingReady: Promise<void> = Promise.resolve();
   #resolvePairingReady: (() => void) | undefined;
+  #lastConnectedAt: Date | undefined;
+  #lastDisconnectedAt: Date | undefined;
+  #reconnects = 0;
+  #sentMessages = 0;
+  #receivedMessages = 0;
+  #failedMessages = 0;
+  #lastIncomingAt: Date | undefined;
+  #lastOutgoingAt: Date | undefined;
+  #decryptFailures = 0;
+  #addonDecryptFailures = 0;
+  #senderKeyMismatches = 0;
+  #phashMismatches = 0;
+  #metadataRecoveries = 0;
+  #metadataRecoveryFailures = 0;
+  #degradedUntil = 0;
+  #healthRefreshTimer: ReturnType<typeof setTimeout> | undefined;
+  #cryptoBackendLogged = false;
 
   constructor(options: ZapoProviderOptions) {
     this.#options = options;
     this.#logger = options.logger ?? new Logger('silent');
     this.#messageCacheSize = Math.max(1, options.messageCacheSize ?? 1_000);
+    this.#connectTimeoutMs = normalizeProviderTimeout(options.connectTimeoutMs, DEFAULT_CONNECT_TIMEOUT_MS);
+    this.#nodeQueryTimeoutMs = normalizeProviderTimeout(options.nodeQueryTimeoutMs, DEFAULT_NODE_QUERY_TIMEOUT_MS);
+    this.#cryptoBackend = detectCryptoBackend();
   }
 
   on<Event extends keyof ProviderEvents>(
@@ -274,6 +313,53 @@ export class ZapoProvider implements WhatsAppProvider {
     listener: (payload: ProviderEvents[Event]) => void | Promise<void>,
   ) {
     return this.#events.on(event, listener);
+  }
+
+  health(): ProviderHealth {
+    const now = Date.now();
+    const state = this.#state;
+    const stability = state === 'connected'
+      ? now < this.#degradedUntil ? 'degraded' : 'healthy'
+      : state === 'reconnecting' || state === 'connecting'
+        ? 'reconnecting'
+        : 'offline';
+
+    return {
+      stability,
+      connection: {
+        state,
+        uptimeMs: this.#connectedAtSeconds > 0 && this.#connected
+          ? Math.max(0, now - this.#connectedAtSeconds * 1_000)
+          : 0,
+        reconnects: this.#reconnects,
+        reconnectAttempt: this.#reconnectAttempt,
+        ...(this.#lastConnectedAt ? { lastConnectedAt: new Date(this.#lastConnectedAt) } : {}),
+        ...(this.#lastDisconnectedAt ? { lastDisconnectedAt: new Date(this.#lastDisconnectedAt) } : {}),
+      },
+      messaging: {
+        sent: this.#sentMessages,
+        received: this.#receivedMessages,
+        failed: this.#failedMessages,
+        ...(this.#lastIncomingAt ? { lastIncomingAt: new Date(this.#lastIncomingAt) } : {}),
+        ...(this.#lastOutgoingAt ? { lastOutgoingAt: new Date(this.#lastOutgoingAt) } : {}),
+      },
+      crypto: {
+        backend: this.#cryptoBackend,
+        acceleration: this.#cryptoBackend === 'napi' || this.#cryptoBackend === 'wasm',
+        decryptFailures: this.#decryptFailures,
+        addonDecryptFailures: this.#addonDecryptFailures,
+        senderKeyMismatches: this.#senderKeyMismatches,
+      },
+      groups: {
+        phashMismatches: this.#phashMismatches,
+        metadataRecoveries: this.#metadataRecoveries,
+        metadataRecoveryFailures: this.#metadataRecoveryFailures,
+      },
+      timeouts: {
+        connectTimeoutMs: this.#connectTimeoutMs,
+        nodeQueryTimeoutMs: this.#nodeQueryTimeoutMs,
+      },
+    };
   }
 
   async connect(): Promise<void> {
@@ -286,8 +372,9 @@ export class ZapoProvider implements WhatsAppProvider {
     }
 
     this.#preparePairingGate();
+    this.#state = this.#reconnectAttempt > 0 ? 'reconnecting' : 'connecting';
     await this.#events.emit('connection', {
-      state: this.#reconnectAttempt > 0 ? 'reconnecting' : 'connecting',
+      state: this.#state,
       attempt: this.#reconnectAttempt,
     });
     this.#startConnect(client);
@@ -299,6 +386,10 @@ export class ZapoProvider implements WhatsAppProvider {
     if (this.#reconnectTimer) {
       clearTimeout(this.#reconnectTimer);
       this.#reconnectTimer = undefined;
+    }
+    if (this.#healthRefreshTimer) {
+      clearTimeout(this.#healthRefreshTimer);
+      this.#healthRefreshTimer = undefined;
     }
 
     const client = this.#client;
@@ -312,6 +403,8 @@ export class ZapoProvider implements WhatsAppProvider {
       }
     } finally {
       this.#connected = false;
+      this.#state = 'closed';
+      this.#lastDisconnectedAt = new Date();
       await this.#releaseStore();
     }
   }
@@ -374,23 +467,25 @@ export class ZapoProvider implements WhatsAppProvider {
     content: MessageContent,
     replyTo?: MessageKey,
   ): Promise<SentMessage> {
-    if ('buttons' in content) {
-      return this.#sendButtons(chatId, content, replyTo);
-    }
+    return this.#trackOutgoing(async () => {
+      if ('buttons' in content) {
+        return this.#sendButtons(chatId, content, replyTo);
+      }
 
-    if ('list' in content) {
-      return this.#sendList(chatId, content, replyTo);
-    }
+      if ('list' in content) {
+        return this.#sendList(chatId, content, replyTo);
+      }
 
-    const client = this.#requireClient();
-    const { value, mentions, viewOnce } = await this.#toContent(content);
-    const result = await client.message.send(chatId, value as never, {
-      ...(replyTo ? { quote: this.#toZapoKey(replyTo) } : {}),
-      ...(mentions.length > 0 ? { mentions } : {}),
-      ...(viewOnce !== undefined ? { viewOnce } : {}),
+      const client = this.#requireClient();
+      const { value, mentions, viewOnce } = await this.#toContent(content);
+      const result = await client.message.send(chatId, value as never, {
+        ...(replyTo ? { quote: this.#toZapoKey(replyTo) } : {}),
+        ...(mentions.length > 0 ? { mentions } : {}),
+        ...(viewOnce !== undefined ? { viewOnce } : {}),
+      });
+
+      return this.#sent(result, chatId);
     });
-
-    return this.#sent(result, chatId);
   }
 
   async repostMessage(
@@ -398,41 +493,45 @@ export class ZapoProvider implements WhatsAppProvider {
     chatId: string,
     options: RepostMessageOptions = {},
   ): Promise<SentMessage> {
-    const original = await this.#findStoredMessage(this.#toZapoKey(source));
+    return this.#trackOutgoing(async () => {
+      const original = await this.#findStoredMessage(this.#toZapoKey(source));
 
-    if (!original?.message) {
-      throw new WhaNextError(
-        'MESSAGE_NOT_FOUND',
-        'The source message is no longer available in the recent-message cache.',
+      if (!original?.message) {
+        throw new WhaNextError(
+          'MESSAGE_NOT_FOUND',
+          'The source message is no longer available in the recent-message cache.',
+          {
+            context: { messageId: source.id, chatId: source.chatId },
+            recoverable: true,
+          },
+        );
+      }
+
+      const result = await this.#requireClient().message.send(
+        chatId,
+        original.message,
         {
-          context: { messageId: source.id, chatId: source.chatId },
-          recoverable: true,
+          forward: true,
+          ...(options.mentions && options.mentions.length > 0
+            ? { mentions: this.#mentions(options.mentions) }
+            : {}),
         },
       );
-    }
 
-    const result = await this.#requireClient().message.send(
-      chatId,
-      original.message,
-      {
-        forward: true,
-        ...(options.mentions && options.mentions.length > 0
-          ? { mentions: this.#mentions(options.mentions) }
-          : {}),
-      },
-    );
-
-    return this.#sent(result, chatId);
+      return this.#sent(result, chatId);
+    });
   }
 
   async reactToMessage(key: MessageKey, emoji?: string): Promise<SentMessage> {
-    const result = await this.#requireClient().message.send(key.chatId, {
-      type: 'reaction',
-      emoji: emoji ?? '',
-      target: this.#toZapoKey(key),
-    });
+    return this.#trackOutgoing(async () => {
+      const result = await this.#requireClient().message.send(key.chatId, {
+        type: 'reaction',
+        emoji: emoji ?? '',
+        target: this.#toZapoKey(key),
+      });
 
-    return this.#sent(result, key.chatId);
+      return this.#sent(result, key.chatId);
+    });
   }
 
   async downloadMedia(key: MessageKey): Promise<DownloadedMedia> {
@@ -477,19 +576,23 @@ export class ZapoProvider implements WhatsAppProvider {
   }
 
   async editMessage(key: MessageKey, content: string): Promise<SentMessage> {
-    const result = await this.#requireClient().message.send(
-      key.chatId,
-      content,
-      { editKey: this.#toZapoKey(key) },
-    );
+    return this.#trackOutgoing(async () => {
+      const result = await this.#requireClient().message.send(
+        key.chatId,
+        content,
+        { editKey: this.#toZapoKey(key) },
+      );
 
-    return this.#sent(result, key.chatId);
+      return this.#sent(result, key.chatId);
+    });
   }
 
   async deleteMessage(key: MessageKey): Promise<void> {
-    await this.#requireClient().message.send(key.chatId, {
-      type: 'revoke',
-      target: this.#toZapoKey(key),
+    await this.#trackOutgoing(async () => {
+      await this.#requireClient().message.send(key.chatId, {
+        type: 'revoke',
+        target: this.#toZapoKey(key),
+      });
     });
   }
 
@@ -563,16 +666,18 @@ export class ZapoProvider implements WhatsAppProvider {
     key: MessageKey,
     pinned: boolean,
   ): Promise<void> {
-    await this.#requireClient().message.send(groupId, pinned
-      ? {
-          type: 'pin',
-          target: this.#toZapoKey(key),
-          durationSecs: 604_800,
-        }
-      : {
-          type: 'unpin',
-          target: this.#toZapoKey(key),
-        });
+    await this.#trackOutgoing(async () => {
+      await this.#requireClient().message.send(groupId, pinned
+        ? {
+            type: 'pin',
+            target: this.#toZapoKey(key),
+            durationSecs: 604_800,
+          }
+        : {
+            type: 'unpin',
+            target: this.#toZapoKey(key),
+          });
+    });
   }
 
   async updateParticipant(
@@ -631,6 +736,15 @@ export class ZapoProvider implements WhatsAppProvider {
     });
   }
 
+  async #trackOutgoing<T>(operation: () => Promise<T>): Promise<T> {
+    try {
+      return await operation();
+    } catch (error) {
+      this.#failedMessages += 1;
+      throw error;
+    }
+  }
+
   async #ensureClient(): Promise<WaClient> {
     if (this.#client) return this.#client;
 
@@ -660,13 +774,30 @@ export class ZapoProvider implements WhatsAppProvider {
       markOnlineOnConnect: false,
       deviceBrowser: this.#deviceBrowser(),
       deviceOsDisplayName: this.#deviceOsDisplayName(),
+      connectTimeoutMs: this.#connectTimeoutMs,
+      nodeQueryTimeoutMs: this.#nodeQueryTimeoutMs,
       history: { enabled: true, requireFullSync: true },
       addons: {
         autoDecrypt: true,
         persistAllSecrets: true,
       },
       media: { processor: sharedMediaProcessor },
-    }, new WhaNextZapoLogger(this.#logger));
+    }, new WhaNextZapoLogger(
+      this.#logger,
+      {},
+      (message, context) => this.#observeZapoWarning(message, context),
+    ));
+
+    if (!this.#cryptoBackendLogged) {
+      this.#cryptoBackendLogged = true;
+      if (this.#cryptoBackend === 'napi' || this.#cryptoBackend === 'wasm') {
+        this.#logger.info('Crypto acceleration enabled.', { backend: this.#cryptoBackend });
+      } else {
+        this.#logger.debug('Crypto acceleration unavailable; using JavaScript backend.', {
+          backend: this.#cryptoBackend,
+        });
+      }
+    }
 
     this.#storeEntry = storeEntry;
     this.#storePath = storePath;
@@ -728,6 +859,8 @@ export class ZapoProvider implements WhatsAppProvider {
     client.on('message_send', (event) => {
       if (!event.id || !event.message) return;
 
+      this.#sentMessages += 1;
+      this.#lastOutgoingAt = new Date();
       this.#remember({
         key: {
           id: event.id,
@@ -793,6 +926,8 @@ export class ZapoProvider implements WhatsAppProvider {
     if (!message) return;
 
     if (stored.key.id) this.#rememberDeliveredMessage(deliveryKey);
+    this.#receivedMessages += 1;
+    this.#lastIncomingAt = new Date();
     this.#messageKeyStore.set(message.keys, stored);
     if (message.quoted && quoted?.message) {
       this.#messageKeyStore.set(
@@ -1153,6 +1288,120 @@ export class ZapoProvider implements WhatsAppProvider {
     void this.#events.emit('groupChanged', { groupId });
   }
 
+  #observeZapoWarning(
+    message: string,
+    context: Readonly<Record<string, unknown>>,
+  ): void {
+    if (message === GROUP_METADATA_MISMATCH_WARNING) {
+      this.#phashMismatches += 1;
+      this.#markDegraded();
+      const groupId = stringValue(context.groupJid);
+      if (groupId?.endsWith('@g.us')) void this.#recoverGroupMetadata(groupId);
+      return;
+    }
+
+    if (message === 'failed to decrypt incoming message') {
+      this.#decryptFailures += 1;
+      const detail = stringValue(context.message);
+      const kind: CryptoDegradationKind = detail === 'sender key id mismatch'
+        ? 'sender_key_mismatch'
+        : 'decrypt_failure';
+      if (kind === 'sender_key_mismatch') this.#senderKeyMismatches += 1;
+      this.#markDegraded();
+      this.#emitCryptoDegraded(kind, context);
+      return;
+    }
+
+    if (message === 'addon auto-decrypt failed') {
+      this.#addonDecryptFailures += 1;
+      this.#markDegraded();
+      this.#emitCryptoDegraded('addon_decrypt_failure', context);
+    }
+  }
+
+  #emitCryptoDegraded(
+    kind: CryptoDegradationKind,
+    context: Readonly<Record<string, unknown>>,
+  ): void {
+    const messageId = stringValue(context.id);
+    const chatId = stringValue(context.from) ?? stringValue(context.groupJid);
+    const participantId = stringValue(context.participant);
+    this.#emitStability({
+      type: 'cryptoDegraded',
+      payload: {
+        kind,
+        occurredAt: new Date(),
+        ...(messageId ? { messageId } : {}),
+        ...(chatId ? { chatId } : {}),
+        ...(participantId ? { participantId } : {}),
+      },
+    });
+  }
+
+  #markDegraded(): void {
+    this.#degradedUntil = Math.max(this.#degradedUntil, Date.now() + PROVIDER_DEGRADED_WINDOW_MS);
+    if (this.#healthRefreshTimer) clearTimeout(this.#healthRefreshTimer);
+    const delay = Math.max(1, this.#degradedUntil - Date.now() + 5);
+    this.#healthRefreshTimer = setTimeout(() => {
+      this.#healthRefreshTimer = undefined;
+      this.#emitStability({
+        type: 'healthRefresh',
+        payload: { occurredAt: new Date() },
+      });
+    }, delay);
+  }
+
+  #emitStability(event: ProviderEvents['stability']): void {
+    void this.#events.emit('stability', event).catch((error) => {
+      this.#logger.warn('Stability event listener failed.', {
+        error: error instanceof Error ? error : new Error(String(error)),
+      });
+    });
+  }
+
+  async #recoverGroupMetadata(groupId: string): Promise<void> {
+    const client = this.#client;
+    const storeEntry = this.#storeEntry;
+    if (!client || !storeEntry || !this.#connected) return;
+
+    const now = Date.now();
+    const lastRecoveryAt = this.#groupMetadataRecoveryAt.get(groupId);
+    if (
+      lastRecoveryAt !== undefined
+      && now - lastRecoveryAt < GROUP_METADATA_RECOVERY_COOLDOWN_MS
+    ) {
+      return;
+    }
+    if (this.#groupMetadataRecoveryInFlight.has(groupId)) return;
+
+    this.#groupMetadataRecoveryAt.set(groupId, now);
+    this.#groupMetadataRecoveryInFlight.add(groupId);
+
+    try {
+      const sessionStore = storeEntry.store.session(this.#sessionId());
+      await sessionStore.groupMetadata.deleteGroupMetadata(groupId);
+      await client.group.queryGroupMetadata(groupId);
+      await this.#events.emit('groupChanged', { groupId });
+      this.#metadataRecoveries += 1;
+      const recoveredAt = new Date();
+      this.#emitStability({
+        type: 'groupMetadataRecovered',
+        payload: { groupId, recoveredAt },
+      });
+      this.#logger.info('Refreshed group metadata after participant-hash mismatch.', {
+        groupId,
+      });
+    } catch (error) {
+      this.#metadataRecoveryFailures += 1;
+      this.#logger.warn('Could not refresh group metadata after participant-hash mismatch.', {
+        groupId,
+        error: error instanceof Error ? error : new Error(String(error)),
+      });
+    } finally {
+      this.#groupMetadataRecoveryInFlight.delete(groupId);
+    }
+  }
+
   async #handleConnectionEvent(
     client: WaClient,
     event: {
@@ -1165,19 +1414,26 @@ export class ZapoProvider implements WhatsAppProvider {
     if (client !== this.#client) return;
 
     if (event.status === 'open') {
+      const wasReconnect = this.#reconnectAttempt > 0;
       this.#connectPromise = undefined;
       this.#connected = true;
+      this.#state = 'connected';
       this.#resolvePairingReady?.();
       this.#resolvePairingReady = undefined;
       this.#connectedAtSeconds = Math.floor(Date.now() / 1_000);
+      this.#lastConnectedAt = new Date();
+      if (wasReconnect) this.#reconnects += 1;
       this.#reconnectAttempt = 0;
       this.#closedNotified = false;
+      this.#groupMetadataRecoveryAt.clear();
+      this.#groupMetadataRecoveryInFlight.clear();
       await this.#events.emit('connection', { state: 'connected' });
       return;
     }
 
     this.#connectPromise = undefined;
     this.#connected = false;
+    this.#lastDisconnectedAt = new Date();
     const details = disconnectDetails(event.reason, event.code);
     const error = connectionError(event.reason, details);
 
@@ -1233,6 +1489,8 @@ export class ZapoProvider implements WhatsAppProvider {
     }
     this.#connectPromise = undefined;
     this.#connected = false;
+    this.#state = 'closed';
+    this.#lastDisconnectedAt = new Date();
     await this.#emitClosedOnce(error);
 
     this.#client = undefined;
@@ -1252,6 +1510,7 @@ export class ZapoProvider implements WhatsAppProvider {
   async #emitClosedOnce(error?: Error): Promise<void> {
     if (this.#closedNotified) return;
     this.#closedNotified = true;
+    this.#state = 'closed';
     await this.#events.emit('connection', {
       state: 'closed',
       ...(error ? { error } : {}),
@@ -1281,7 +1540,7 @@ export class ZapoProvider implements WhatsAppProvider {
     if (this.#reconnectTimer) return;
 
     const options = this.#options.reconnect;
-    const maxAttempts = options?.maxAttempts ?? 10;
+    const maxAttempts = options?.maxAttempts ?? Number.POSITIVE_INFINITY;
 
     if (options?.enabled === false || this.#reconnectAttempt >= maxAttempts) {
       await this.#emitClosedOnce(error);
@@ -1290,8 +1549,9 @@ export class ZapoProvider implements WhatsAppProvider {
     }
 
     this.#reconnectAttempt += 1;
+    this.#state = 'reconnecting';
     await this.#events.emit('connection', {
-      state: 'reconnecting',
+      state: this.#state,
       attempt: this.#reconnectAttempt,
       ...(error ? { error } : {}),
     });
@@ -2131,6 +2391,11 @@ function createZapoStoreEntry(storePath: string): SharedZapoStoreEntry {
       sqlite: createSqliteStore({
         path: storePath,
         driver: 'auto',
+        pragmas: {
+          journal_mode: 'WAL',
+          synchronous: 'NORMAL',
+          busy_timeout: 5_000,
+        },
       }),
     },
     providers: {
@@ -2149,11 +2414,19 @@ function createZapoStoreEntry(storePath: string): SharedZapoStoreEntry {
     cacheProviders: {
       messageSecret: 'sqlite',
     },
+    memory: {
+      cacheTtlMs: {
+        groupMetadataMs: GROUP_METADATA_CACHE_TTL_MS,
+        deviceListMs: DEVICE_LIST_CACHE_TTL_MS,
+      },
+    },
   });
 
   const Database = require('better-sqlite3') as BetterSqliteConstructorLike;
   const snapshotDb = new Database(messageSnapshotStorePath(storePath));
   snapshotDb.exec(`
+    PRAGMA journal_mode = WAL;
+    PRAGMA synchronous = NORMAL;
     PRAGMA busy_timeout = 5000;
     CREATE TABLE IF NOT EXISTS whanext_message_snapshots (
       session_id TEXT NOT NULL,
@@ -2445,23 +2718,82 @@ function booleanValue(value: unknown): boolean | undefined {
   return undefined;
 }
 
+function normalizeProviderTimeout(value: number | undefined, fallback: number): number {
+  if (value === undefined || !Number.isFinite(value)) return fallback;
+  return Math.max(1_000, Math.floor(value));
+}
+
+function detectCryptoBackend(): CryptoAccelerationBackend {
+  const requested = process.env.ZAPO_NATIVE_BACKEND?.trim().toLowerCase() ?? 'auto';
+  if (requested === 'js' || requested === 'none') return 'js';
+
+  if ((requested === 'auto' || requested === 'napi') && nativeNapiAvailable()) {
+    return 'napi';
+  }
+
+  if (
+    (requested === 'auto' || requested === 'wasm')
+    && supportsZapoWasmRuntime()
+    && moduleResolvable('@zapo-js/native/wasm/pkg/zapo_native_wasm.js')
+    && moduleResolvable('@zapo-js/native/wasm/pkg/zapo_native_wasm_bg.wasm')
+  ) {
+    return 'wasm';
+  }
+
+  return 'js';
+}
+
+function nativeNapiAvailable(): boolean {
+  try {
+    require('@zapo-js/native');
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function moduleResolvable(specifier: string): boolean {
+  try {
+    require.resolve(specifier);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function supportsZapoWasmRuntime(): boolean {
+  const [major = 0, minor = 0] = process.versions.node.split('.').map(Number);
+  if (major > 22) return true;
+  if (major === 22) return minor >= 12;
+  if (major === 20) return minor >= 19;
+  return false;
+}
+
 function bytesField(value: unknown): Uint8Array | undefined {
   if (value instanceof Uint8Array) return value;
   return undefined;
 }
 
 
+type ZapoWarnObserver = (
+  message: string,
+  context: Readonly<Record<string, unknown>>,
+) => void;
+
 class WhaNextZapoLogger implements ZapoLogger {
   readonly level: ZapoLogLevel;
   readonly #logger: Logger;
   readonly #context: Readonly<Record<string, unknown>>;
+  readonly #onWarn: ZapoWarnObserver | undefined;
 
   constructor(
     logger: Logger,
     context: Readonly<Record<string, unknown>> = {},
+    onWarn?: ZapoWarnObserver,
   ) {
     this.#logger = logger;
     this.#context = context;
+    this.#onWarn = onWarn;
     this.level = logger.level === 'debug'
       ? 'debug'
       : logger.level === 'warn'
@@ -2484,7 +2816,9 @@ class WhaNextZapoLogger implements ZapoLogger {
   }
 
   warn(message: string, context?: Readonly<Record<string, unknown>>): void {
-    this.#logger.warn(message, this.#merge(context));
+    const merged = this.#merge(context);
+    this.#logger.warn(message, merged);
+    this.#onWarn?.(message, merged);
   }
 
   error(message: string, context?: Readonly<Record<string, unknown>>): void {
@@ -2495,7 +2829,7 @@ class WhaNextZapoLogger implements ZapoLogger {
     return new WhaNextZapoLogger(this.#logger, {
       ...this.#context,
       ...bindings,
-    });
+    }, this.#onWarn);
   }
 
   #merge(

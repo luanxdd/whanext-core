@@ -1,5 +1,10 @@
 import type { CacheOptions } from '@/cache/cache-store.js';
 import { MemoryCache } from '@/cache/memory-cache.js';
+import type {
+  CommandConcurrencyHealth,
+  CommandQueueFullEvent,
+  CommandQueueTimeoutEvent,
+} from '@/commands/concurrency.js';
 import {
   CommandRouter,
   type RouterOptions,
@@ -29,6 +34,14 @@ import { SqliteMuteStore } from '@/mute/sqlite-mute-store.js';
 import { TypedEventEmitter } from '@/provider/event-emitter.js';
 import type {
   ConnectionUpdate,
+  CryptoDegradedEvent,
+  GroupMetadataRecoveredEvent,
+  ProviderConnectionHealth,
+  ProviderCryptoHealth,
+  ProviderGroupHealth,
+  ProviderMessagingHealth,
+  ProviderTimeoutHealth,
+  StabilityHealthStatus,
   WhatsAppProvider,
 } from '@/provider/provider.js';
 import { AccountService } from '@/services/account-service.js';
@@ -39,6 +52,17 @@ import { MemberService } from '@/services/member-service.js';
 import { MessageService } from '@/services/message-service.js';
 import { UserService } from '@/services/user-service.js';
 
+export interface HealthChangedEvent {
+  previous: StabilityHealthStatus;
+  current: StabilityHealthStatus;
+  health: AppHealth;
+}
+
+export interface ConnectionRecoveredEvent {
+  recoveredAt: Date;
+  reconnects: number;
+}
+
 export interface AppEvents {
   message: Message;
   messageDeleted: MessageDeleted;
@@ -48,6 +72,12 @@ export interface AppEvents {
   mute: MuteEnforcement;
   call: CallEvent;
   groupParticipantsChanged: GroupParticipantsChanged;
+  healthChanged: HealthChangedEvent;
+  connectionRecovered: ConnectionRecoveredEvent;
+  groupMetadataRecovered: GroupMetadataRecoveredEvent;
+  cryptoDegraded: CryptoDegradedEvent;
+  commandQueueTimeout: CommandQueueTimeoutEvent;
+  commandQueueFull: CommandQueueFullEvent;
 }
 
 export interface LoginOptions {
@@ -59,12 +89,19 @@ export type AppHealthStatus = 'idle' | 'starting' | 'ready' | 'stopped';
 
 export interface AppHealth {
   status: AppHealthStatus;
+  stability: StabilityHealthStatus;
   state: ConnectionUpdate['state'];
   ready: boolean;
   uptimeMs: number;
   timestamp: Date;
   muteEnabled: boolean;
   logLevel: LogLevel;
+  connection: ProviderConnectionHealth;
+  messaging: ProviderMessagingHealth;
+  crypto: ProviderCryptoHealth;
+  groups: ProviderGroupHealth;
+  commands: CommandConcurrencyHealth;
+  timeouts: ProviderTimeoutHealth;
 }
 
 export interface WhaNextAppOptions {
@@ -94,6 +131,7 @@ export class WhaNextApp {
   readonly #router: CommandRouter;
   readonly #startedAt = Date.now();
   #state: ConnectionUpdate['state'] = 'idle';
+  #lastStability: StabilityHealthStatus = 'offline';
 
   constructor(
     provider: WhatsAppProvider,
@@ -150,14 +188,51 @@ export class WhaNextApp {
   }
 
   health(): AppHealth {
+    const provider = this.#provider.health?.();
+    const connection: ProviderConnectionHealth = provider?.connection ?? {
+      state: this.#state,
+      uptimeMs: this.isReady ? Date.now() - this.#startedAt : 0,
+      reconnects: 0,
+      reconnectAttempt: 0,
+    };
+    const messaging: ProviderMessagingHealth = provider?.messaging ?? {
+      sent: 0,
+      received: 0,
+      failed: 0,
+    };
+    const crypto: ProviderCryptoHealth = provider?.crypto ?? {
+      backend: 'unknown',
+      acceleration: false,
+      decryptFailures: 0,
+      addonDecryptFailures: 0,
+      senderKeyMismatches: 0,
+    };
+    const groups: ProviderGroupHealth = provider?.groups ?? {
+      phashMismatches: 0,
+      metadataRecoveries: 0,
+      metadataRecoveryFailures: 0,
+    };
+    const timeouts: ProviderTimeoutHealth = provider?.timeouts ?? {
+      connectTimeoutMs: 0,
+      nodeQueryTimeoutMs: 0,
+    };
+    const stability = provider?.stability ?? this.#fallbackStability();
+
     return {
       status: this.#healthStatus(),
+      stability,
       state: this.#state,
       ready: this.isReady,
       uptimeMs: Date.now() - this.#startedAt,
       timestamp: new Date(),
       muteEnabled: this.mute.enabled,
       logLevel: this.logger.level,
+      connection,
+      messaging,
+      crypto,
+      groups,
+      commands: this.#router.health(),
+      timeouts,
     };
   }
 
@@ -247,9 +322,35 @@ export class WhaNextApp {
 
   #bind(): void {
     this.#provider.on('connection', async (update) => {
+      const previousState = this.#state;
       this.#state = update.state;
       this.#logConnection(update);
       await this.#events.emit('connection', update);
+      if (update.state === 'connected' && previousState === 'reconnecting') {
+        const providerHealth = this.#provider.health?.();
+        await this.#events.emit('connectionRecovered', {
+          recoveredAt: new Date(),
+          reconnects: providerHealth?.connection.reconnects ?? 1,
+        });
+      }
+      await this.#refreshHealthState();
+    });
+
+    this.#provider.on('stability', async (event) => {
+      if (event.type === 'groupMetadataRecovered') {
+        await this.#events.emit('groupMetadataRecovered', event.payload);
+      } else if (event.type === 'cryptoDegraded') {
+        await this.#events.emit('cryptoDegraded', event.payload);
+      }
+      await this.#refreshHealthState();
+    });
+
+    this.#router.on('commandQueueTimeout', async (event) => {
+      await this.#events.emit('commandQueueTimeout', event);
+    });
+
+    this.#router.on('commandQueueFull', async (event) => {
+      await this.#events.emit('commandQueueFull', event);
     });
 
     this.#provider.on('groupChanged', ({ groupId }) => this.group.invalidate(groupId));
@@ -324,6 +425,24 @@ export class WhaNextApp {
       } catch (error) {
         await this.#reportError(error, { messageId: message.id });
       }
+    });
+  }
+
+  #fallbackStability(): StabilityHealthStatus {
+    if (this.#state === 'connected') return 'healthy';
+    if (this.#state === 'connecting' || this.#state === 'reconnecting') return 'reconnecting';
+    return 'offline';
+  }
+
+  async #refreshHealthState(): Promise<void> {
+    const health = this.health();
+    if (health.stability === this.#lastStability) return;
+    const previous = this.#lastStability;
+    this.#lastStability = health.stability;
+    await this.#events.emit('healthChanged', {
+      previous,
+      current: health.stability,
+      health,
     });
   }
 

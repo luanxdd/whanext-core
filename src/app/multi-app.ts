@@ -331,6 +331,13 @@ function mergeCreateOptions(
     };
   }
 
+  if (shared.providerTimeouts || account.providerTimeouts) {
+    merged.providerTimeouts = {
+      ...shared.providerTimeouts,
+      ...account.providerTimeouts,
+    };
+  }
+
   if (
     shared.logger
     && account.logger

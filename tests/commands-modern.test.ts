@@ -452,6 +452,85 @@ describe('modern commands', () => {
     ]);
   });
 
+  it('times out queued commands instead of waiting indefinitely', async () => {
+    const provider = new FakeProvider();
+    const app = await create({ provider });
+    let release: () => void = () => undefined;
+    const blocker = new Promise<void>((resolve) => { release = resolve; });
+    const errors: string[] = [];
+    const events: string[] = [];
+    let calls = 0;
+    app.commands.onError((_ctx, error) => { errors.push(error.code); });
+    app.on('commandQueueTimeout', (event) => { events.push(event.messageId); });
+    app.commands.command(defineCommand({
+      name: 'queue-timeout',
+      description: 'Queue timeout test.',
+      concurrency: {
+        strategy: 'queue',
+        scope: 'chat',
+        max: 1,
+        maxQueue: 2,
+        queueTimeoutMs: 20,
+      },
+      async execute() {
+        calls += 1;
+        if (calls === 1) await blocker;
+      },
+    }));
+
+    const first = app.commands.dispatch(makeMessage('!queue-timeout', 'queue-timeout-1'));
+    await vi.waitFor(() => expect(calls).toBe(1));
+    await app.commands.dispatch(makeMessage('!queue-timeout', 'queue-timeout-2'));
+
+    expect(errors).toEqual(['COMMAND_QUEUE_TIMEOUT']);
+    expect(events).toEqual(['queue-timeout-2']);
+    expect(app.health().commands.queueTimeouts).toBe(1);
+    expect(app.health().commands.queued).toBe(0);
+
+    release();
+    await first;
+  });
+
+  it('rejects new work when a command queue reaches its limit', async () => {
+    const provider = new FakeProvider();
+    const app = await create({ provider });
+    let release: () => void = () => undefined;
+    const blocker = new Promise<void>((resolve) => { release = resolve; });
+    const errors: string[] = [];
+    const events: string[] = [];
+    let calls = 0;
+    app.commands.onError((_ctx, error) => { errors.push(error.code); });
+    app.on('commandQueueFull', (event) => { events.push(event.messageId); });
+    app.commands.command(defineCommand({
+      name: 'queue-full',
+      description: 'Queue limit test.',
+      concurrency: {
+        strategy: 'queue',
+        scope: 'chat',
+        max: 1,
+        maxQueue: 1,
+        queueTimeoutMs: 1_000,
+      },
+      async execute() {
+        calls += 1;
+        if (calls === 1) await blocker;
+      },
+    }));
+
+    const first = app.commands.dispatch(makeMessage('!queue-full', 'queue-full-1'));
+    await vi.waitFor(() => expect(calls).toBe(1));
+    const second = app.commands.dispatch(makeMessage('!queue-full', 'queue-full-2'));
+    await vi.waitFor(() => expect(app.health().commands.queued).toBe(1));
+    await app.commands.dispatch(makeMessage('!queue-full', 'queue-full-3'));
+
+    expect(errors).toEqual(['COMMAND_QUEUE_FULL']);
+    expect(events).toEqual(['queue-full-3']);
+    expect(app.health().commands.queueRejected).toBe(1);
+
+    release();
+    await Promise.all([first, second]);
+  });
+
   it('aborts the previous signal with the replace strategy', async () => {
     const provider = new FakeProvider();
     const app = await create({ provider });

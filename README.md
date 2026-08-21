@@ -311,20 +311,27 @@ const app = await create({
 
 ## Health checks
 
-`app.health()` entrega um snapshot sem consultar o WhatsApp novamente:
+`app.health()` entrega um snapshot local e barato, sem consultar o WhatsApp novamente. Os campos antigos permanecem disponíveis e a camada de estabilidade acrescenta conexão, mensagens, crypto, grupos, filas e timeouts:
 
 ```ts
 const health = app.health();
 
 console.log(health.status);
+console.log(health.stability);
 console.log(health.ready);
 console.log(health.state);
 console.log(health.uptimeMs);
-console.log(health.muteEnabled);
-console.log(health.logLevel);
+console.log(health.connection);
+console.log(health.messaging);
+console.log(health.crypto);
+console.log(health.groups);
+console.log(health.commands);
+console.log(health.timeouts);
 ```
 
-Estados possíveis: `idle`, `starting`, `ready` e `stopped`.
+`status` continua representando o ciclo da aplicação: `idle`, `starting`, `ready` ou `stopped`. `stability` representa a saúde operacional do provider: `healthy`, `degraded`, `reconnecting` ou `offline`.
+
+O provider Zapo contabiliza reconexões, mensagens enviadas/recebidas, falhas de envio, falhas de descriptografia, `sender key id mismatch`, falhas de addons, divergências de `phash` e recuperações de metadata. O router contabiliza execuções ativas, fila atual, expirações e rejeições por fila cheia.
 
 ```ts
 server.get('/health', async () => app.health());
@@ -333,10 +340,66 @@ server.get('/health', async () => app.health());
 Para uma verificação simples:
 
 ```ts
-if (app.isReady) {
-  console.log('Aplicação pronta.');
+if (app.isReady && app.health().stability === 'healthy') {
+  console.log('Aplicação pronta e saudável.');
 }
 ```
+
+## Estabilidade do provider
+
+O provider oficial usa timeouts explícitos para conexão e queries de protocolo. Os padrões são 15 segundos para conexão e 30 segundos para queries; ambos podem ser ajustados na criação da aplicação:
+
+```ts
+const app = await create({
+  providerTimeouts: {
+    connectTimeoutMs: 15_000,
+    nodeQueryTimeoutMs: 30_000,
+  },
+});
+```
+
+Valores menores que 1 segundo são normalizados para 1 segundo. Os valores efetivos ficam disponíveis em `app.health().timeouts`.
+
+A aceleração crypto do Zapo também é integrada de forma opcional. `@zapo-js/native` acelera X25519 e XEdDSA e o provider continua funcionando com o backend JavaScript caso o acelerador não esteja disponível. O pacote publicado usa WASM; um build N-API local também é detectado quando realmente carregável.
+
+```ts
+const health = app.health();
+
+console.log(health.crypto.backend);
+console.log(health.crypto.acceleration);
+```
+
+Backends reportados: `napi`, `wasm`, `js` ou `unknown`. Para forçar o fallback JavaScript, inicie o processo com `ZAPO_NATIVE_BACKEND=js`.
+
+A aplicação expõe eventos tipados para observabilidade sem parsing de logs:
+
+```ts
+app.on('healthChanged', ({ previous, current }) => {
+  console.log(previous, current);
+});
+
+app.on('connectionRecovered', ({ recoveredAt, reconnects }) => {
+  console.log(recoveredAt, reconnects);
+});
+
+app.on('groupMetadataRecovered', ({ groupId }) => {
+  console.log(groupId);
+});
+
+app.on('cryptoDegraded', ({ kind, chatId }) => {
+  console.log(kind, chatId);
+});
+
+app.on('commandQueueTimeout', ({ command, queuedForMs }) => {
+  console.log(command, queuedForMs);
+});
+
+app.on('commandQueueFull', ({ command, queued }) => {
+  console.log(command, queued);
+});
+```
+
+Falhas criptográficas transitórias deixam o provider em `degraded` por uma janela curta; a volta para `healthy` também dispara `healthChanged`. A recuperação de metadata por `phash` continua específica ao grupo afetado e não apaga Sender Keys nem sessões Signal.
 
 ## Usuários
 
@@ -697,6 +760,8 @@ app.commands.command(
       scope: 'chat',
       max: 1,
       strategy: 'queue',
+      maxQueue: 10,
+      queueTimeoutMs: 60_000,
     },
 
     async execute(ctx) {
@@ -713,6 +778,21 @@ app.commands.command(
     },
   }),
 );
+```
+
+Para `strategy: 'queue'`, o WhaNext limita por padrão a fila a 10 execuções aguardando e cada entrada pode esperar até 60 segundos. `maxQueue: 0` remove o limite de quantidade e `queueTimeoutMs: 0` remove o timeout. Quando os limites são atingidos, o router usa `COMMAND_QUEUE_FULL` ou `COMMAND_QUEUE_TIMEOUT` e emite os eventos tipados correspondentes.
+
+```ts
+app.commands.onError(async (ctx, error) => {
+  if (error.code === 'COMMAND_QUEUE_FULL') {
+    await ctx.reply('Muitos comandos estão aguardando. Tente novamente em instantes.');
+    return;
+  }
+
+  if (error.code === 'COMMAND_QUEUE_TIMEOUT') {
+    await ctx.reply('A fila demorou demais. Envie o comando novamente.');
+  }
+});
 ```
 
 ### Comandos exclusivos do dono

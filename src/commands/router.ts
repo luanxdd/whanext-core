@@ -8,7 +8,12 @@ import {
   isCommandGroup,
   type RegisteredCommand,
 } from '@/commands/command.js';
-import { CommandConcurrencyController } from '@/commands/concurrency.js';
+import {
+  CommandConcurrencyController,
+  type CommandConcurrencyHealth,
+  type CommandQueueFullEvent,
+  type CommandQueueTimeoutEvent,
+} from '@/commands/concurrency.js';
 import {
   createCommandContext,
   type CommandContext,
@@ -25,6 +30,7 @@ import {
   toWhaNextError,
 } from '@/errors/error.js';
 import type { Message, SentMessage } from '@/models/message.js';
+import { TypedEventEmitter } from '@/provider/event-emitter.js';
 import type { GroupService } from '@/services/group-service.js';
 import { UserService } from '@/services/user-service.js';
 
@@ -50,6 +56,11 @@ export type CommandErrorHandler = (
   error: WhaNextError,
 ) => void | Promise<void>;
 
+export interface CommandRouterEvents {
+  commandQueueTimeout: CommandQueueTimeoutEvent;
+  commandQueueFull: CommandQueueFullEvent;
+}
+
 interface ResolvedCommand {
   registered: RegisteredCommand;
   layers: readonly CommandDefinition[];
@@ -74,7 +85,8 @@ export class CommandRouter {
   readonly #globalMiddleware: CommandMiddleware[] = [];
   readonly #errorHandlers: CommandErrorHandler[] = [];
   readonly #cooldowns = new Map<string, number>();
-  readonly #concurrency = new CommandConcurrencyController();
+  readonly #events = new TypedEventEmitter<CommandRouterEvents>();
+  readonly #concurrency: CommandConcurrencyController;
   readonly #beforeExecute?: RouterOptions['beforeExecute'];
   readonly #afterExecute?: RouterOptions['afterExecute'];
   #cooldownOperations = 0;
@@ -85,6 +97,13 @@ export class CommandRouter {
     servicesOrGroup: CommandRuntimeServices | GroupService,
     options: RouterOptions = {},
   ) {
+    this.#concurrency = new CommandConcurrencyController((event) => {
+      if (event.type === 'commandQueueTimeout') {
+        void this.#events.emit('commandQueueTimeout', event.payload).catch(() => undefined);
+      } else {
+        void this.#events.emit('commandQueueFull', event.payload).catch(() => undefined);
+      }
+    });
     this.#services = isRuntimeServices(servicesOrGroup)
       ? servicesOrGroup
       : createLegacyServices(servicesOrGroup);
@@ -113,6 +132,17 @@ export class CommandRouter {
 
   get size(): number {
     return this.catalog({ includeHidden: true }).length;
+  }
+
+  health(): CommandConcurrencyHealth {
+    return this.#concurrency.health();
+  }
+
+  on<Event extends keyof CommandRouterEvents>(
+    event: Event,
+    listener: (payload: CommandRouterEvents[Event]) => void | Promise<void>,
+  ): () => void {
+    return this.#events.on(event, listener);
   }
 
   command(definition: CommandDefinition): this {
@@ -317,6 +347,12 @@ export class CommandRouter {
           await this.#authorize(resolved.layers, context);
           this.#consumeCooldown(resolved, context);
           await this.#execute(resolved, context);
+        },
+        {
+          command: resolved.registered.path.join(' '),
+          messageId: message.id,
+          chatId: message.chatId,
+          userId: message.sender.id,
         },
       );
       return true;

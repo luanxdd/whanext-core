@@ -29,7 +29,9 @@ const { mocks, MockClient } = vi.hoisted(() => {
     readonly message = {
       send: vi.fn(async (to: string, content: unknown, options?: unknown) => {
         this.sent.push({ to, content, ...(options === undefined ? {} : { options }) });
-        return { id: `sent-${this.sent.length}` };
+        const id = `sent-${this.sent.length}`;
+        this.emit('message_send', { id, to, message: content });
+        return { id };
       }),
       downloadBytes: vi.fn(async () => new Uint8Array([1, 2, 3])),
     };
@@ -124,6 +126,9 @@ vi.mock('zapo-js', () => ({
         const messages = records.get(sessionId) ?? new Map<string, any>();
         records.set(sessionId, messages);
         const session = {
+          groupMetadata: {
+            deleteGroupMetadata: vi.fn(async () => 1),
+          },
           messages: {
             upsert: vi.fn(async (record: any) => {
               messages.set(record.id, record);
@@ -224,6 +229,11 @@ describe('ZapoProvider', () => {
     expect(mocks.sqliteOptions[0]).toMatchObject({
       path: expect.stringMatching(/accounts[\\/]state\.sqlite$/),
       driver: 'auto',
+      pragmas: {
+        journal_mode: 'WAL',
+        synchronous: 'NORMAL',
+        busy_timeout: 5_000,
+      },
     });
     expect(mocks.storeOptions[0]).toMatchObject({
       providers: {
@@ -242,17 +252,152 @@ describe('ZapoProvider', () => {
       cacheProviders: {
         messageSecret: 'sqlite',
       },
+      memory: {
+        cacheTtlMs: {
+          groupMetadataMs: 180_000,
+          deviceListMs: 180_000,
+        },
+      },
     });
     expect(client().options).toMatchObject({
       sessionId: 'main',
       deviceBrowser: 'safari',
       deviceOsDisplayName: 'macOS',
       markOnlineOnConnect: false,
+      connectTimeoutMs: 15_000,
+      nodeQueryTimeoutMs: 30_000,
       history: { enabled: true, requireFullSync: true },
       addons: {
         autoDecrypt: true,
         persistAllSecrets: true,
       },
+    });
+    await provider.disconnect();
+  });
+
+  it('refreshes only the affected group metadata after a participant-hash mismatch', async () => {
+    const { provider, client: current } = await connectedProvider({
+      auth: './session',
+      browser: Browser.Windows,
+      sessionId: 'main',
+    });
+    const store = mocks.stores[0];
+    const session = store.session('main');
+    const recovered: string[] = [];
+    provider.on('stability', (event) => {
+      if (event.type === 'groupMetadataRecovered') recovered.push(event.payload.groupId);
+    });
+    current.group.queryGroupMetadata.mockClear();
+
+    (current.logger as any).warn(
+      'group message publish acknowledged with mismatch metadata',
+      {
+        groupJid: '123@g.us',
+        localPhash: '2:local',
+        serverPhash: '2:server',
+      },
+    );
+    await flushAsync();
+
+    expect(session.groupMetadata.deleteGroupMetadata).toHaveBeenCalledTimes(1);
+    expect(session.groupMetadata.deleteGroupMetadata).toHaveBeenCalledWith('123@g.us');
+    expect(current.group.queryGroupMetadata).toHaveBeenCalledTimes(1);
+    expect(current.group.queryGroupMetadata).toHaveBeenCalledWith('123@g.us');
+    expect(recovered).toEqual(['123@g.us']);
+    expect(provider.health().groups).toMatchObject({
+      phashMismatches: 1,
+      metadataRecoveries: 1,
+      metadataRecoveryFailures: 0,
+    });
+
+    (current.logger as any).warn(
+      'group message publish acknowledged with mismatch metadata',
+      {
+        groupJid: '123@g.us',
+        localPhash: '2:local-2',
+        serverPhash: '2:server-2',
+      },
+    );
+    await flushAsync();
+
+    expect(session.groupMetadata.deleteGroupMetadata).toHaveBeenCalledTimes(1);
+    expect(current.group.queryGroupMetadata).toHaveBeenCalledTimes(1);
+    await provider.disconnect();
+  });
+
+  it('keeps metadata recovery successful when a stability listener throws', async () => {
+    const { provider, client: current } = await connectedProvider({
+      auth: './session',
+      browser: Browser.Windows,
+      sessionId: 'listener-isolation',
+    });
+    provider.on('stability', () => {
+      throw new Error('listener failed');
+    });
+
+    (current.logger as any).warn(
+      'group message publish acknowledged with mismatch metadata',
+      {
+        groupJid: '456@g.us',
+        localPhash: '2:local',
+        serverPhash: '2:server',
+      },
+    );
+    await flushAsync();
+
+    expect(provider.health().groups).toMatchObject({
+      phashMismatches: 1,
+      metadataRecoveries: 1,
+      metadataRecoveryFailures: 0,
+    });
+    await provider.disconnect();
+  });
+
+  it('passes explicit provider timeouts to Zapo and exposes them in health', async () => {
+    const { provider } = await connectedProvider({
+      auth: './session',
+      browser: Browser.Windows,
+      connectTimeoutMs: 8_000,
+      nodeQueryTimeoutMs: 12_000,
+    });
+
+    expect(client().options).toMatchObject({
+      connectTimeoutMs: 8_000,
+      nodeQueryTimeoutMs: 12_000,
+    });
+    expect(provider.health().timeouts).toEqual({
+      connectTimeoutMs: 8_000,
+      nodeQueryTimeoutMs: 12_000,
+    });
+    await provider.disconnect();
+  });
+
+  it('tracks crypto degradation warnings as typed stability signals', async () => {
+    const { provider, client: current } = await connectedProvider();
+    const kinds: string[] = [];
+    provider.on('stability', (event) => {
+      if (event.type === 'cryptoDegraded') kinds.push(event.payload.kind);
+    });
+
+    (current.logger as any).warn('failed to decrypt incoming message', {
+      id: 'message-1',
+      from: '123@g.us',
+      participant: '456@lid',
+      encType: 'skmsg',
+      message: 'sender key id mismatch',
+    });
+    (current.logger as any).warn('addon auto-decrypt failed', {
+      id: 'message-2',
+      message: 'Unsupported state or unable to authenticate data',
+    });
+    await flushAsync();
+
+    expect(kinds).toEqual(['sender_key_mismatch', 'addon_decrypt_failure']);
+    expect(provider.health().stability).toBe('degraded');
+    expect(provider.health().crypto).toMatchObject({
+      decryptFailures: 1,
+      addonDecryptFailures: 1,
+      senderKeyMismatches: 1,
     });
     await provider.disconnect();
   });

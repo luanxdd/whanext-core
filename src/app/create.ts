@@ -10,6 +10,11 @@ import type { MuteOptions } from '@/mute/mute-store.js';
 import { ZapoProvider } from '@/provider/zapo/zapo-provider.js';
 import type { WhatsAppProvider } from '@/provider/provider.js';
 
+export interface ProviderTimeoutOptions {
+  connectTimeoutMs?: number;
+  nodeQueryTimeoutMs?: number;
+}
+
 export interface ReconnectOptions {
   enabled?: boolean;
   maxAttempts?: number;
@@ -27,6 +32,7 @@ export interface CreateOptions {
   mute?: MuteOptions;
   router?: Omit<RouterOptions, 'prefix'>;
   reconnect?: ReconnectOptions;
+  providerTimeouts?: ProviderTimeoutOptions;
   messageCacheSize?: number;
   processOfflineMessages?: boolean;
   provider?: WhatsAppProvider;
@@ -47,6 +53,12 @@ export async function create(options: CreateOptions = {}): Promise<WhaNextApp> {
       ? { processOfflineMessages: options.processOfflineMessages }
       : {}),
     ...(options.reconnect ? { reconnect: options.reconnect } : {}),
+    ...(options.providerTimeouts?.connectTimeoutMs !== undefined
+      ? { connectTimeoutMs: options.providerTimeouts.connectTimeoutMs }
+      : {}),
+    ...(options.providerTimeouts?.nodeQueryTimeoutMs !== undefined
+      ? { nodeQueryTimeoutMs: options.providerTimeouts.nodeQueryTimeoutMs }
+      : {}),
   });
 
   return new WhaNextApp(provider, {

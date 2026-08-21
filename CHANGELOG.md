@@ -1,5 +1,40 @@
 # Changelog
 
+## 0.19.18
+
+### Stability
+- Added bounded command queues for `strategy: 'queue'`: `maxQueue` defaults to 10 waiting executions and `queueTimeoutMs` defaults to 60 seconds. Set either option to `0` to disable that limit.
+- Added `COMMAND_QUEUE_FULL` and `COMMAND_QUEUE_TIMEOUT` with typed `commandQueueFull` and `commandQueueTimeout` application events.
+- Added explicit Zapo transport/query timeouts through `providerTimeouts.connectTimeoutMs` and `providerTimeouts.nodeQueryTimeoutMs`, defaulting to 15 seconds and 30 seconds.
+- Stability event listeners are isolated from provider recovery work so consumer handler failures cannot turn a successful metadata recovery into a provider failure.
+
+### Health
+- Expanded `app.health()` without removing the existing fields. It now exposes `stability`, connection/reconnect state, messaging counters, crypto degradation counters, group metadata recovery counters, command queue metrics, and effective provider timeouts.
+- Added `healthy`, `degraded`, `reconnecting`, and `offline` operational stability states. Transient crypto/group warnings move the provider to `degraded` for a bounded window and automatically return it to `healthy`.
+- Added typed `healthChanged`, `connectionRecovered`, `groupMetadataRecovered`, and `cryptoDegraded` events.
+
+### Performance
+- Added `@zapo-js/native@0.1.0` as an optional dependency. Zapo automatically uses its X25519/XEdDSA accelerator when available and falls back to JavaScript when unavailable.
+- Health reports the detected crypto backend as `napi`, `wasm`, `js`, or `unknown`; the published optional package is detected as WASM on supported Node runtimes while locally built N-API addons are reported only when they can actually be loaded.
+
+### Compatibility
+- Existing command concurrency declarations remain valid; the queue limits only affect commands that already use `strategy: 'queue'`.
+- Custom providers are not required to implement `health()`; WhaNext supplies neutral health fallbacks when a provider does not expose runtime metrics.
+
+## 0.19.17
+
+### Reliability
+- Group sends now self-heal when Zapo reports an acknowledged participant-hash mismatch: WhaNext invalidates only the affected group's metadata cache, fetches fresh server metadata, invalidates the public group snapshot, and rate-limits recovery to once per group per minute.
+- Volatile Zapo `groupMetadata` and `deviceList` memory caches now expire after 3 minutes instead of the 5-minute default, reducing stale LID/device fan-out windows without disabling caching or forcing an IQ/usync on every send.
+- Transient WhatsApp disconnects now retry indefinitely by default with the existing exponential backoff; applications that set `reconnect.maxAttempts` keep their explicit limit. Fatal/logout reasons still stop reconnection immediately.
+
+### Performance
+- The shared Zapo SQLite store now uses `WAL`, `synchronous=NORMAL`, and a 5-second `busy_timeout`, improving concurrent reads/writes for persisted Signal, sender-key, mailbox, and app-state data.
+- The WhaNext mutation-snapshot SQLite database now uses the same WAL/NORMAL settings, reducing fsync contention on active bots.
+
+### Safety
+- Sender keys and Signal sessions are never globally reset during mismatch recovery. Zapo's normal retry-receipt/decryption recovery remains authoritative; WhaNext only refreshes stale group metadata.
+
 ## 0.19.16
 
 ### Fixed

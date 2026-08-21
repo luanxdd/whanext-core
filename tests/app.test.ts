@@ -90,6 +90,36 @@ describe('WhaNextApp', () => {
     expect(app.health().uptimeMs).toBeGreaterThanOrEqual(0);
   });
 
+  it('emits typed stability events and health transitions', async () => {
+    const provider = new FakeProvider();
+    const app = await create({ provider, logger: 'silent' });
+    const health: string[] = [];
+    const recovered: number[] = [];
+    const groups: string[] = [];
+    const crypto: string[] = [];
+
+    app.on('healthChanged', (event) => { health.push(`${event.previous}:${event.current}`); });
+    app.on('connectionRecovered', (event) => { recovered.push(event.reconnects); });
+    app.on('groupMetadataRecovered', (event) => { groups.push(event.groupId); });
+    app.on('cryptoDegraded', (event) => { crypto.push(event.kind); });
+
+    await provider.events.emit('connection', { state: 'reconnecting', attempt: 1 });
+    await provider.events.emit('connection', { state: 'connected' });
+    await provider.events.emit('stability', {
+      type: 'groupMetadataRecovered',
+      payload: { groupId: '123@g.us', recoveredAt: new Date() },
+    });
+    await provider.events.emit('stability', {
+      type: 'cryptoDegraded',
+      payload: { kind: 'sender_key_mismatch', occurredAt: new Date() },
+    });
+
+    expect(health).toEqual(['offline:reconnecting', 'reconnecting:healthy']);
+    expect(recovered).toEqual([1]);
+    expect(groups).toEqual(['123@g.us']);
+    expect(crypto).toEqual(['sender_key_mismatch']);
+  });
+
   it('dispatches normalized messages to registered commands', async () => {
     const provider = new FakeProvider();
     const app = await create({ provider });

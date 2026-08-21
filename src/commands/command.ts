@@ -15,6 +15,8 @@ export interface CommandConcurrency {
   max?: number;
   scope?: CommandScope;
   strategy?: ConcurrencyStrategy;
+  maxQueue?: number;
+  queueTimeoutMs?: number;
 }
 
 export interface CommandLocalization {

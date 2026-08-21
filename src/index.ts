@@ -1,6 +1,7 @@
 export {
   create,
   type CreateOptions,
+  type ProviderTimeoutOptions,
   type ReconnectOptions,
 } from '@/app/create.js';
 export {
@@ -19,6 +20,8 @@ export {
   type AppHealth,
   type AppHealthStatus,
   type AppEvents,
+  type ConnectionRecoveredEvent,
+  type HealthChangedEvent,
   type LoginOptions,
 } from '@/app/whanext-app.js';
 export { Browser } from '@/auth/browser.js';
@@ -50,6 +53,13 @@ export {
   type ExecutableCommandDefinition,
   type RegisteredCommand,
 } from '@/commands/command.js';
+export type {
+  CommandConcurrencyContext,
+  CommandConcurrencyEvent,
+  CommandConcurrencyHealth,
+  CommandQueueFullEvent,
+  CommandQueueTimeoutEvent,
+} from '@/commands/concurrency.js';
 export {
   DeferredReply,
   type CommandAccountContext,
@@ -91,6 +101,7 @@ export {
   type CommandCatalogOptions,
   type CommandErrorHandler,
   type CommandHelpOptions,
+  type CommandRouterEvents,
   type RouterOptions,
 } from '@/commands/router.js';
 export {
@@ -183,7 +194,19 @@ export type {
 export type {
   ConnectionState,
   ConnectionUpdate,
+  CryptoAccelerationBackend,
+  CryptoDegradationKind,
+  CryptoDegradedEvent,
+  GroupMetadataRecoveredEvent,
   ParticipantUpdateResult,
   PresenceState,
+  ProviderConnectionHealth,
+  ProviderCryptoHealth,
+  ProviderGroupHealth,
+  ProviderHealth,
+  ProviderMessagingHealth,
+  ProviderStabilityEvent,
+  ProviderTimeoutHealth,
+  StabilityHealthStatus,
   WhatsAppProvider,
 } from '@/provider/provider.js';

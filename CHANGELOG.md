@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.19.16
+
+### Fixed
+- Remote media URLs are now streamed into Zapo instead of being fully materialized as `Uint8Array` in memory before upload. This removes the extra whole-file buffering step that could stall or intermittently fail larger MP3/audio sends.
+- Remote media fetches now have a bounded 120-second transfer timeout and surface provider errors when the source cannot be opened or returns an empty body.
+- Local paths and caller-provided byte arrays keep their existing behavior.
+
+### Performance
+- URL-backed audio/video/image uploads now follow Zapo's recommended streaming media path, keeping memory usage flat while Zapo stages, hashes, encrypts, and uploads the attachment.
+
 ## 0.19.15
 
 ### Added

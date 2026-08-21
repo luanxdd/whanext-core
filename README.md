@@ -537,6 +537,8 @@ const downloaded = await app.media.download(message);
 await writeFile(`./downloads/${downloaded.fileName ?? message.id}`, downloaded.data);
 ```
 
+Ao enviar `{ url }`, o provider abre a origem remota como stream e entrega o fluxo ao pipeline de mídia do Zapo; o arquivo não é carregado inteiro na memória antes do upload. Para arquivos locais, `{ path }` continua sendo a opção mais direta.
+
 `download()` aceita a `Message` recebida, uma `QuotedMessage` ou uma `MessageKey` e devolve o buffer junto dos metadados normalizados. A mídia deve ser baixada enquanto a mensagem ainda está no cache da instância; o provider tenta renovar a URL de mídia automaticamente quando necessário.
 
 Para visualização única citada, o provider oficial preserva os metadados do envelope sem expor tipos do Zapo:

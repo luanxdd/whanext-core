@@ -365,6 +365,44 @@ describe('ZapoProvider', () => {
     });
   });
 
+  it('streams remote media URLs into Zapo instead of buffering the whole file', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(new Uint8Array([1, 2, 3, 4]), {
+        status: 200,
+        headers: { 'content-type': 'audio/mpeg' },
+      }),
+    );
+    const { provider, client: current } = await connectedProvider();
+
+    await provider.sendMessage('5511999999999@s.whatsapp.net', {
+      audio: { url: 'https://cdn.example.com/song.mp3' },
+      mimetype: 'audio/mpeg',
+      voice: false,
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://cdn.example.com/song.mp3',
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
+
+    const sent = current.sent[0]?.content as { media?: unknown };
+    expect(sent).toMatchObject({
+      type: 'audio',
+      mimetype: 'audio/mpeg',
+      ptt: false,
+    });
+    expect(sent.media).not.toBeInstanceOf(Uint8Array);
+    expect(typeof (sent.media as { pipe?: unknown }).pipe).toBe('function');
+
+    const chunks: Uint8Array[] = [];
+    for await (const chunk of sent.media as AsyncIterable<Uint8Array>) {
+      chunks.push(chunk);
+    }
+    expect([...Buffer.concat(chunks)]).toEqual([1, 2, 3, 4]);
+
+    fetchMock.mockRestore();
+  });
+
   it('sends Native Flow copy, link and quick-reply buttons without exposing Zapo proto', async () => {
     const { provider, client: current } = await connectedProvider();
 

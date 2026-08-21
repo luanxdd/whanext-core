@@ -1,5 +1,7 @@
 import { mkdir, stat } from 'node:fs/promises';
 import { createRequire } from 'node:module';
+import { Readable } from 'node:stream';
+import type { ReadableStream as NodeReadableStream } from 'node:stream/web';
 import { basename, dirname, join, resolve } from 'node:path';
 import { createMediaProcessor } from '@zapo-js/media-utils';
 import { createSqliteStore } from '@zapo-js/store-sqlite';
@@ -128,6 +130,7 @@ const fatalDisconnectReasons = new Set([
 ]);
 const fatalDisconnectCodes = new Set([401, 403, 405, 406, 409, 516]);
 const sharedMediaProcessor = createMediaProcessor();
+const REMOTE_MEDIA_TIMEOUT_MS = 120_000;
 const messageSnapshotRetentionSeconds = 7 * 24 * 60 * 60;
 const messageSnapshotMaxPerSession = 20_000;
 const messageSnapshotPruneInterval = 256;
@@ -1572,13 +1575,25 @@ export class ZapoProvider implements WhatsAppProvider {
     };
   }
 
-  async #media(source: MediaSource): Promise<string | Uint8Array> {
+  async #media(source: MediaSource): Promise<string | Uint8Array | Readable> {
     if (source instanceof Uint8Array) return source;
     if ('path' in source) return source.path;
 
-    const response = await fetch(source.url);
+    let response: Response;
+    try {
+      response = await fetch(source.url, {
+        signal: AbortSignal.timeout(REMOTE_MEDIA_TIMEOUT_MS),
+      });
+    } catch (error) {
+      throw new WhaNextError(
+        'PROVIDER_ERROR',
+        'Could not open the remote media source.',
+        { cause: error, recoverable: true },
+      );
+    }
 
     if (!response.ok) {
+      await response.body?.cancel().catch(() => undefined);
       throw new WhaNextError(
         'PROVIDER_ERROR',
         'Could not download the remote media source.',
@@ -1589,7 +1604,17 @@ export class ZapoProvider implements WhatsAppProvider {
       );
     }
 
-    return new Uint8Array(await response.arrayBuffer());
+    if (!response.body) {
+      throw new WhaNextError(
+        'PROVIDER_ERROR',
+        'The remote media source returned an empty response body.',
+        { recoverable: true },
+      );
+    }
+
+    return Readable.fromWeb(
+      response.body as unknown as NodeReadableStream<Uint8Array>,
+    );
   }
 
   #mentions(mentions: readonly MentionTarget[]): string[] {

@@ -372,6 +372,83 @@ describe('ZapoProvider', () => {
     await provider.disconnect();
   });
 
+  it('tracks unavailable messages and correlates primary-device recovery', async () => {
+    const { provider, client: current } = await connectedProvider();
+    const events: string[] = [];
+    provider.on('stability', (event) => {
+      if (event.type === 'messageUnavailable' || event.type === 'messageRecovered') {
+        events.push(event.type);
+      }
+    });
+
+    current.emit('message_unavailable', {
+      kind: 'other',
+      resendRequested: true,
+      key: {
+        id: 'recover-me',
+        remoteJid: '123@g.us',
+        fromMe: false,
+        participant: '200@lid',
+      },
+      timestampSeconds: Math.floor(Date.now() / 1_000),
+      rawNode: { tag: 'message', attrs: {} },
+    });
+    current.emit('message', {
+      key: {
+        id: 'recover-me',
+        remoteJid: '123@g.us',
+        fromMe: false,
+        participant: '200@lid',
+      },
+      message: { conversation: '&menu' },
+      timestampSeconds: Math.floor(Date.now() / 1_000),
+    });
+    await flushAsync();
+
+    expect(events).toEqual(['messageUnavailable', 'messageRecovered']);
+    expect(provider.health().messaging).toMatchObject({
+      unavailable: 1,
+      resendRequested: 1,
+      recovered: 1,
+      recoveryFailed: 0,
+      received: 1,
+    });
+    await provider.disconnect();
+  });
+
+  it('tracks decrypted payloads that later fail stanza decoding', async () => {
+    const { provider, client: current } = await connectedProvider();
+    const failures: string[] = [];
+    provider.on('stability', (event) => {
+      if (event.type === 'messageDecodeFailure') failures.push(event.payload.reason);
+    });
+
+    current.emit('debug_decrypted_payload', {
+      rawNode: { tag: 'message', attrs: {} },
+      stanzaId: 'decode-me',
+      chatJid: '123@g.us',
+      encIndex: 0,
+      encType: 'skmsg',
+      plaintext: new Uint8Array([1, 2, 3]),
+    });
+    current.emit('debug_unhandled_stanza', {
+      rawNode: { tag: 'message', attrs: {} },
+      stanzaId: 'decode-me',
+      chatJid: '123@g.us',
+      reason: 'message decode failed',
+    });
+    await flushAsync();
+
+    expect(failures).toEqual(['message decode failed']);
+    expect(provider.health().messaging).toMatchObject({
+      decryptedPayloads: 1,
+      unhandledStanzas: 1,
+      decodeFailures: 1,
+    });
+    expect(provider.health().stability).toBe('degraded');
+    await provider.disconnect();
+  });
+
   it('tracks crypto degradation warnings as typed stability signals', async () => {
     const { provider, client: current } = await connectedProvider();
     const kinds: string[] = [];
@@ -546,6 +623,46 @@ describe('ZapoProvider', () => {
     expect([...Buffer.concat(chunks)]).toEqual([1, 2, 3, 4]);
 
     fetchMock.mockRestore();
+  });
+
+  it('preserves LID and PN addressing metadata when replying to received group messages', async () => {
+    const { provider, client: current } = await connectedProvider();
+    const received: any[] = [];
+    provider.on('message', (message) => {
+      received.push(message);
+    });
+
+    current.emit('message', {
+      key: {
+        id: 'incoming-lid-group',
+        remoteJid: '123@g.us',
+        fromMe: false,
+        participant: '200@lid',
+        participantAlt: '5522000000000@s.whatsapp.net',
+        addressingMode: 'lid',
+      },
+      message: { conversation: '&menu' },
+      timestampSeconds: Math.floor(Date.now() / 1_000),
+    });
+    await flushAsync();
+
+    expect(received).toHaveLength(1);
+    await provider.sendMessage('123@g.us', { text: 'menu' }, received[0].keys);
+
+    expect(current.message.send).toHaveBeenCalledWith(
+      '123@g.us',
+      { type: 'text', text: 'menu' },
+      {
+        quote: {
+          id: 'incoming-lid-group',
+          remoteJid: '123@g.us',
+          fromMe: false,
+          participant: '200@lid',
+          participantAlt: '5522000000000@s.whatsapp.net',
+          addressingMode: 'lid',
+        },
+      },
+    );
   });
 
   it('sends Native Flow copy, link and quick-reply buttons without exposing Zapo proto', async () => {

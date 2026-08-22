@@ -12,7 +12,10 @@ import {
   type Logger as ZapoLogger,
   type LogLevel as ZapoLogLevel,
   type Proto,
+  type WaIncomingDecryptedPayloadEvent,
   type WaIncomingMessageEvent,
+  type WaIncomingUnhandledStanzaEvent,
+  type WaIncomingUnavailableMessageEvent,
   type WaStore,
 } from 'zapo-js';
 import { Browser } from '@/auth/browser.js';
@@ -144,6 +147,8 @@ const GROUP_METADATA_CACHE_TTL_MS = 180_000;
 const DEVICE_LIST_CACHE_TTL_MS = 180_000;
 const GROUP_METADATA_RECOVERY_COOLDOWN_MS = 60_000;
 const GROUP_METADATA_MISMATCH_WARNING = 'group message publish acknowledged with mismatch metadata';
+const MESSAGE_RECOVERY_TIMEOUT_MS = 30_000;
+const DECRYPT_CORRELATION_TTL_MS = 15_000;
 const messageSnapshotRetentionSeconds = 7 * 24 * 60 * 60;
 const messageSnapshotMaxPerSession = 20_000;
 const messageSnapshotPruneInterval = 256;
@@ -158,6 +163,19 @@ interface StoredZapoMessage {
 
 interface ZapoPublishResultLike {
   id?: string | null;
+}
+
+interface PendingUnavailableRecovery {
+  requestedAt: number;
+  timer: ReturnType<typeof setTimeout>;
+  messageId?: string;
+  chatId?: string;
+  participantId?: string;
+}
+
+interface RecentDecryptedPayload {
+  observedAt: number;
+  encType: string;
 }
 
 interface ZapoCredentialsLike {
@@ -257,6 +275,8 @@ export class ZapoProvider implements WhatsAppProvider {
   readonly #messageStore = new Map<string, StoredZapoMessage>();
   readonly #messageKeyStore = new WeakMap<MessageKey, StoredZapoMessage>();
   readonly #deliveredMessageStore = new Set<string>();
+  readonly #pendingUnavailableRecoveries = new Map<string, PendingUnavailableRecovery>();
+  readonly #recentDecryptedPayloads = new Map<string, RecentDecryptedPayload>();
   readonly #handledProtocolStore = new Set<string>();
   readonly #callCreatorStore = new Map<string, string>();
   readonly #groupMetadataRecoveryAt = new Map<string, number>();
@@ -287,6 +307,17 @@ export class ZapoProvider implements WhatsAppProvider {
   #sentMessages = 0;
   #receivedMessages = 0;
   #failedMessages = 0;
+  #decryptedPayloads = 0;
+  #unavailableMessages = 0;
+  #resendRequestedMessages = 0;
+  #recoveredMessages = 0;
+  #recoveryFailedMessages = 0;
+  #unavailableUnrecoverableMessages = 0;
+  #decodeFailures = 0;
+  #unhandledStanzas = 0;
+  #ignoredOfflineMessages = 0;
+  #duplicateMessages = 0;
+  #normalizationFailures = 0;
   #lastIncomingAt: Date | undefined;
   #lastOutgoingAt: Date | undefined;
   #decryptFailures = 0;
@@ -340,6 +371,17 @@ export class ZapoProvider implements WhatsAppProvider {
         sent: this.#sentMessages,
         received: this.#receivedMessages,
         failed: this.#failedMessages,
+        decryptedPayloads: this.#decryptedPayloads,
+        unavailable: this.#unavailableMessages,
+        resendRequested: this.#resendRequestedMessages,
+        recovered: this.#recoveredMessages,
+        recoveryFailed: this.#recoveryFailedMessages,
+        unavailableUnrecoverable: this.#unavailableUnrecoverableMessages,
+        decodeFailures: this.#decodeFailures,
+        unhandledStanzas: this.#unhandledStanzas,
+        ignoredOffline: this.#ignoredOfflineMessages,
+        duplicates: this.#duplicateMessages,
+        normalizationFailures: this.#normalizationFailures,
         ...(this.#lastIncomingAt ? { lastIncomingAt: new Date(this.#lastIncomingAt) } : {}),
         ...(this.#lastOutgoingAt ? { lastOutgoingAt: new Date(this.#lastOutgoingAt) } : {}),
       },
@@ -391,6 +433,11 @@ export class ZapoProvider implements WhatsAppProvider {
       clearTimeout(this.#healthRefreshTimer);
       this.#healthRefreshTimer = undefined;
     }
+    for (const pending of this.#pendingUnavailableRecoveries.values()) {
+      clearTimeout(pending.timer);
+    }
+    this.#pendingUnavailableRecoveries.clear();
+    this.#recentDecryptedPayloads.clear();
 
     const client = this.#client;
     this.#connectPromise = undefined;
@@ -856,6 +903,18 @@ export class ZapoProvider implements WhatsAppProvider {
       this.#handleMessage(event);
     });
 
+    client.on('message_unavailable', (event) => {
+      this.#handleUnavailableMessage(event);
+    });
+
+    client.on('debug_decrypted_payload', (event) => {
+      this.#handleDecryptedPayload(event);
+    });
+
+    client.on('debug_unhandled_stanza', (event) => {
+      this.#handleUnhandledStanza(event);
+    });
+
     client.on('message_send', (event) => {
       if (!event.id || !event.message) return;
 
@@ -904,7 +963,17 @@ export class ZapoProvider implements WhatsAppProvider {
       this.#remember(quoted as unknown as StoredZapoMessage);
     }
 
+    const deliveryKey = this.#messageDeliveryKey(stored.key);
+    this.#resolveUnavailableRecovery(deliveryKey, stored.key);
+    const decryptedCorrelationKey = this.#stanzaCorrelationKey(
+      stored.key.remoteJid ?? undefined,
+      stored.key.id ?? undefined,
+    );
+    if (decryptedCorrelationKey) this.#recentDecryptedPayloads.delete(decryptedCorrelationKey);
+
     if (this.#isOfflineMessage(stored)) {
+      this.#ignoredOfflineMessages += 1;
+      this.#emitMessageDiscarded('offline', stored.key);
       this.#logger.debug('Ignored message queued before the current live connection.', {
         messageId: stored.key.id ?? undefined,
         chatId: stored.key.remoteJid ?? undefined,
@@ -913,8 +982,9 @@ export class ZapoProvider implements WhatsAppProvider {
       return;
     }
 
-    const deliveryKey = this.#messageDeliveryKey(stored.key);
     if (stored.key.id && this.#deliveredMessageStore.has(deliveryKey)) {
+      this.#duplicateMessages += 1;
+      this.#emitMessageDiscarded('duplicate', stored.key);
       this.#logger.debug('Ignored duplicate Zapo message event.', {
         messageId: stored.key.id,
         chatId: stored.key.remoteJid ?? undefined,
@@ -923,7 +993,15 @@ export class ZapoProvider implements WhatsAppProvider {
     }
 
     const message = normalizeZapoMessage(event);
-    if (!message) return;
+    if (!message) {
+      this.#normalizationFailures += 1;
+      this.#emitMessageDiscarded('normalization_failed', stored.key);
+      this.#logger.warn('Could not normalize incoming Zapo message.', {
+        messageId: stored.key.id ?? undefined,
+        chatId: stored.key.remoteJid ?? undefined,
+      });
+      return;
+    }
 
     if (stored.key.id) this.#rememberDeliveredMessage(deliveryKey);
     this.#receivedMessages += 1;
@@ -937,6 +1015,173 @@ export class ZapoProvider implements WhatsAppProvider {
     }
 
     void this.#events.emit('message', message);
+  }
+
+  #handleUnavailableMessage(event: WaIncomingUnavailableMessageEvent): void {
+    this.#unavailableMessages += 1;
+    const occurredAt = new Date();
+    const messageId = event.key.id || undefined;
+    const chatId = event.key.remoteJid || undefined;
+    const participantId = event.key.participant ?? event.key.participantAlt ?? undefined;
+
+    this.#emitStability({
+      type: 'messageUnavailable',
+      payload: {
+        kind: event.kind,
+        resendRequested: event.resendRequested,
+        occurredAt,
+        ...(messageId ? { messageId } : {}),
+        ...(chatId ? { chatId } : {}),
+        ...(participantId ? { participantId } : {}),
+      },
+    });
+
+    if (!event.resendRequested) {
+      this.#unavailableUnrecoverableMessages += 1;
+      const log = event.kind === 'other' ? this.#logger.warn.bind(this.#logger) : this.#logger.debug.bind(this.#logger);
+      log('Incoming message is unavailable and was not queued for recovery.', {
+        kind: event.kind,
+        ...(messageId ? { messageId } : {}),
+        ...(chatId ? { chatId } : {}),
+        ...(participantId ? { participantId } : {}),
+      });
+      return;
+    }
+
+    this.#resendRequestedMessages += 1;
+    const deliveryKey = this.#messageDeliveryKey(event.key);
+    const previous = this.#pendingUnavailableRecoveries.get(deliveryKey);
+    if (previous) clearTimeout(previous.timer);
+    const requestedAt = Date.now();
+    const timer = setTimeout(() => {
+      const pending = this.#pendingUnavailableRecoveries.get(deliveryKey);
+      if (!pending || pending.requestedAt !== requestedAt) return;
+      this.#pendingUnavailableRecoveries.delete(deliveryKey);
+      this.#recoveryFailedMessages += 1;
+      this.#markDegraded();
+      const failedAt = new Date();
+      this.#emitStability({
+        type: 'messageRecoveryFailed',
+        payload: {
+          failedAt,
+          waitedMs: failedAt.getTime() - pending.requestedAt,
+          ...(pending.messageId ? { messageId: pending.messageId } : {}),
+          ...(pending.chatId ? { chatId: pending.chatId } : {}),
+          ...(pending.participantId ? { participantId: pending.participantId } : {}),
+        },
+      });
+      this.#logger.warn('Unavailable message recovery did not arrive in time.', {
+        ...(pending.messageId ? { messageId: pending.messageId } : {}),
+        ...(pending.chatId ? { chatId: pending.chatId } : {}),
+        waitedMs: failedAt.getTime() - pending.requestedAt,
+      });
+    }, MESSAGE_RECOVERY_TIMEOUT_MS);
+
+    this.#pendingUnavailableRecoveries.set(deliveryKey, {
+      requestedAt,
+      timer,
+      ...(messageId ? { messageId } : {}),
+      ...(chatId ? { chatId } : {}),
+      ...(participantId ? { participantId } : {}),
+    });
+    this.#logger.info('Incoming message unavailable; primary-device resend requested.', {
+      ...(messageId ? { messageId } : {}),
+      ...(chatId ? { chatId } : {}),
+      ...(participantId ? { participantId } : {}),
+    });
+  }
+
+  #resolveUnavailableRecovery(deliveryKey: string, key: ZapoMessageKeyLike): void {
+    const pending = this.#pendingUnavailableRecoveries.get(deliveryKey);
+    if (!pending) return;
+    clearTimeout(pending.timer);
+    this.#pendingUnavailableRecoveries.delete(deliveryKey);
+    this.#recoveredMessages += 1;
+    const recoveredAt = new Date();
+    const participantId = key.participant ?? key.participantAlt ?? pending.participantId;
+    this.#emitStability({
+      type: 'messageRecovered',
+      payload: {
+        recoveredAt,
+        recoveryMs: recoveredAt.getTime() - pending.requestedAt,
+        ...(key.id ? { messageId: key.id } : pending.messageId ? { messageId: pending.messageId } : {}),
+        ...(key.remoteJid ? { chatId: key.remoteJid } : pending.chatId ? { chatId: pending.chatId } : {}),
+        ...(participantId ? { participantId } : {}),
+      },
+    });
+    this.#logger.info('Recovered unavailable message from the primary device.', {
+      ...(key.id ? { messageId: key.id } : {}),
+      ...(key.remoteJid ? { chatId: key.remoteJid } : {}),
+      recoveryMs: recoveredAt.getTime() - pending.requestedAt,
+    });
+  }
+
+  #handleDecryptedPayload(event: WaIncomingDecryptedPayloadEvent): void {
+    this.#decryptedPayloads += 1;
+    const correlationKey = this.#stanzaCorrelationKey(event.chatJid, event.stanzaId);
+    if (!correlationKey) return;
+    const now = Date.now();
+    this.#recentDecryptedPayloads.set(correlationKey, {
+      observedAt: now,
+      encType: event.encType,
+    });
+    for (const [key, value] of this.#recentDecryptedPayloads) {
+      if (now - value.observedAt > DECRYPT_CORRELATION_TTL_MS) {
+        this.#recentDecryptedPayloads.delete(key);
+      }
+    }
+  }
+
+  #handleUnhandledStanza(event: WaIncomingUnhandledStanzaEvent): void {
+    this.#unhandledStanzas += 1;
+    const correlationKey = this.#stanzaCorrelationKey(event.chatJid, event.stanzaId);
+    const decrypted = correlationKey ? this.#recentDecryptedPayloads.get(correlationKey) : undefined;
+    const now = Date.now();
+    if (decrypted && now - decrypted.observedAt <= DECRYPT_CORRELATION_TTL_MS) {
+      this.#decodeFailures += 1;
+      this.#markDegraded();
+      this.#emitStability({
+        type: 'messageDecodeFailure',
+        payload: {
+          occurredAt: new Date(now),
+          reason: event.reason,
+          encType: decrypted.encType,
+          ...(event.stanzaId ? { stanzaId: event.stanzaId } : {}),
+          ...(event.chatJid ? { chatId: event.chatJid } : {}),
+        },
+      });
+      this.#logger.warn('Decrypted incoming payload could not be decoded into a supported stanza.', {
+        reason: event.reason,
+        encType: decrypted.encType,
+        ...(event.stanzaId ? { stanzaId: event.stanzaId } : {}),
+        ...(event.chatJid ? { chatId: event.chatJid } : {}),
+      });
+      if (correlationKey) this.#recentDecryptedPayloads.delete(correlationKey);
+      return;
+    }
+
+    this.#logger.debug('Incoming stanza was not handled by Zapo.', {
+      reason: event.reason,
+      ...(event.stanzaId ? { stanzaId: event.stanzaId } : {}),
+      ...(event.chatJid ? { chatId: event.chatJid } : {}),
+    });
+  }
+
+  #emitMessageDiscarded(reason: 'offline' | 'duplicate' | 'normalization_failed', key: ZapoMessageKeyLike): void {
+    this.#emitStability({
+      type: 'messageDiscarded',
+      payload: {
+        reason,
+        occurredAt: new Date(),
+        ...(key.id ? { messageId: key.id } : {}),
+        ...(key.remoteJid ? { chatId: key.remoteJid } : {}),
+      },
+    });
+  }
+
+  #stanzaCorrelationKey(chatJid: string | undefined, stanzaId: string | undefined): string | undefined {
+    if (!stanzaId) return undefined;
+    return `${chatJid ?? ''}:${stanzaId}`;
   }
 
   #handleAddonEvent(event: ZapoAddonEventLike): void {
@@ -1886,13 +2131,22 @@ export class ZapoProvider implements WhatsAppProvider {
     id: string;
     remoteJid: string;
     fromMe: boolean;
+    remoteJidAlt?: string;
     participant?: string;
+    participantAlt?: string;
+    addressingMode?: string;
   } {
+    const original = this.#messageKeyStore.get(key)?.key;
+    const participant = original?.participant ?? key.participantId;
+
     return {
       id: key.id,
       remoteJid: key.chatId,
       fromMe: key.fromMe,
-      ...(key.participantId ? { participant: key.participantId } : {}),
+      ...(original?.remoteJidAlt ? { remoteJidAlt: original.remoteJidAlt } : {}),
+      ...(participant ? { participant } : {}),
+      ...(original?.participantAlt ? { participantAlt: original.participantAlt } : {}),
+      ...(original?.addressingMode ? { addressingMode: original.addressingMode } : {}),
     };
   }
 

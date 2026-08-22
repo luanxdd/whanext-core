@@ -331,7 +331,21 @@ console.log(health.timeouts);
 
 `status` continua representando o ciclo da aplicação: `idle`, `starting`, `ready` ou `stopped`. `stability` representa a saúde operacional do provider: `healthy`, `degraded`, `reconnecting` ou `offline`.
 
-O provider Zapo contabiliza reconexões, mensagens enviadas/recebidas, falhas de envio, falhas de descriptografia, `sender key id mismatch`, falhas de addons, divergências de `phash` e recuperações de metadata. O router contabiliza execuções ativas, fila atual, expirações e rejeições por fila cheia.
+O provider Zapo contabiliza reconexões, mensagens enviadas/recebidas, falhas de envio, falhas de descriptografia, `sender key id mismatch`, falhas de addons, divergências de `phash` e recuperações de metadata. Com Zapo 1.8.0, `health.messaging` também mostra mensagens indisponíveis, pedidos de resend, recuperações, payloads descriptografados, falhas de decode, stanzas não tratadas, duplicatas, mensagens offline ignoradas e falhas de normalização. O router contabiliza execuções ativas, fila atual, expirações e rejeições por fila cheia.
+
+```ts
+const { messaging } = app.health();
+
+console.log(messaging.unavailable);
+console.log(messaging.resendRequested);
+console.log(messaging.recovered);
+console.log(messaging.recoveryFailed);
+console.log(messaging.decodeFailures);
+console.log(messaging.ignoredOffline);
+console.log(messaging.duplicates);
+```
+
+`decryptedPayloads` conta payloads `<enc>` individuais, portanto pode ser maior que `received` em fanout para vários devices. O WhaNext usa esse sinal apenas para correlação e nunca expõe os bytes descriptografados no health, eventos públicos ou logs.
 
 ```ts
 server.get('/health', async () => app.health());
@@ -388,6 +402,26 @@ app.on('groupMetadataRecovered', ({ groupId }) => {
 
 app.on('cryptoDegraded', ({ kind, chatId }) => {
   console.log(kind, chatId);
+});
+
+app.on('messageUnavailable', ({ messageId, resendRequested }) => {
+  console.log(messageId, resendRequested);
+});
+
+app.on('messageRecovered', ({ messageId, recoveryMs }) => {
+  console.log(messageId, recoveryMs);
+});
+
+app.on('messageRecoveryFailed', ({ messageId, waitedMs }) => {
+  console.log(messageId, waitedMs);
+});
+
+app.on('messageDecodeFailure', ({ stanzaId, reason }) => {
+  console.log(stanzaId, reason);
+});
+
+app.on('messageDiscarded', ({ messageId, reason }) => {
+  console.log(messageId, reason);
 });
 
 app.on('commandQueueTimeout', ({ command, queuedForMs }) => {

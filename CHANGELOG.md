@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.19.19
+
+### Provider
+- Updated the official provider from `zapo-js@1.7.1` to `zapo-js@1.8.0`.
+- Kept full received LID/PN addressing metadata when replying, reacting, editing, revoking, and pinning messages.
+- Inherits Zapo 1.8.0 mailbox `fromMe` persistence fixes, group-status stanza attribute unwrapping, username support, expired-CDN media resend support, and mobile-primary WhatsApp Business support.
+
+### Incoming message observability
+- Added `message_unavailable` tracking with primary-device resend correlation and a bounded 30-second recovery window.
+- Added `debug_decrypted_payload` correlation with `debug_unhandled_stanza` so decrypted-but-undecodable payloads are visible without logging plaintext bytes.
+- Expanded `health().messaging` with `decryptedPayloads`, `unavailable`, `resendRequested`, `recovered`, `recoveryFailed`, `unavailableUnrecoverable`, `decodeFailures`, `unhandledStanzas`, `ignoredOffline`, `duplicates`, and `normalizationFailures`.
+- Added typed `messageUnavailable`, `messageRecovered`, `messageRecoveryFailed`, `messageDecodeFailure`, and `messageDiscarded` application events.
+- Recovery failures and decrypted-payload decode failures temporarily mark provider stability as `degraded`; expected unrecoverable placeholders such as consumed view-once messages are counted without automatically degrading the session.
+
+### Safety
+- Raw decrypted payload bytes from Zapo are never emitted through the WhaNext public events or written to logs.
+- Existing `received`, `sent`, and `failed` counters keep their previous semantics; the new counters explain why an inbound stanza may not have become a public WhaNext `Message`.
+
 ## 0.19.18
 
 ### Stability

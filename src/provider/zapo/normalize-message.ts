@@ -20,6 +20,7 @@ export interface ZapoMessageKeyLike {
   fromMe?: boolean | null;
   participant?: string | null;
   participantAlt?: string | null;
+  addressingMode?: string | null;
   senderUsername?: string | null;
 }
 

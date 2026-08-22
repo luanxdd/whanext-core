@@ -1,6 +1,6 @@
 {
   "name": "@whanext/core",
-  "version": "0.19.18",
+  "version": "0.19.19",
   "description": "A modern, high-level WhatsApp SDK for TypeScript with commands, groups, media, moderation and structured logging.",
   "type": "module",
   "sideEffects": false,
@@ -42,7 +42,7 @@
     "better-sqlite3": "^12.6.2",
     "file-type": "^19.0.0",
     "sharp": "^0.33.0",
-    "zapo-js": "1.7.1"
+    "zapo-js": "1.8.0"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",

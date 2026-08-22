@@ -36,6 +36,11 @@ import type {
   ConnectionUpdate,
   CryptoDegradedEvent,
   GroupMetadataRecoveredEvent,
+  MessageDecodeFailureEvent,
+  MessageDiscardedEvent,
+  MessageRecoveredEvent,
+  MessageRecoveryFailedEvent,
+  MessageUnavailableEvent,
   ProviderConnectionHealth,
   ProviderCryptoHealth,
   ProviderGroupHealth,
@@ -76,6 +81,11 @@ export interface AppEvents {
   connectionRecovered: ConnectionRecoveredEvent;
   groupMetadataRecovered: GroupMetadataRecoveredEvent;
   cryptoDegraded: CryptoDegradedEvent;
+  messageUnavailable: MessageUnavailableEvent;
+  messageRecovered: MessageRecoveredEvent;
+  messageRecoveryFailed: MessageRecoveryFailedEvent;
+  messageDecodeFailure: MessageDecodeFailureEvent;
+  messageDiscarded: MessageDiscardedEvent;
   commandQueueTimeout: CommandQueueTimeoutEvent;
   commandQueueFull: CommandQueueFullEvent;
 }
@@ -199,6 +209,17 @@ export class WhaNextApp {
       sent: 0,
       received: 0,
       failed: 0,
+      decryptedPayloads: 0,
+      unavailable: 0,
+      resendRequested: 0,
+      recovered: 0,
+      recoveryFailed: 0,
+      unavailableUnrecoverable: 0,
+      decodeFailures: 0,
+      unhandledStanzas: 0,
+      ignoredOffline: 0,
+      duplicates: 0,
+      normalizationFailures: 0,
     };
     const crypto: ProviderCryptoHealth = provider?.crypto ?? {
       backend: 'unknown',
@@ -341,6 +362,16 @@ export class WhaNextApp {
         await this.#events.emit('groupMetadataRecovered', event.payload);
       } else if (event.type === 'cryptoDegraded') {
         await this.#events.emit('cryptoDegraded', event.payload);
+      } else if (event.type === 'messageUnavailable') {
+        await this.#events.emit('messageUnavailable', event.payload);
+      } else if (event.type === 'messageRecovered') {
+        await this.#events.emit('messageRecovered', event.payload);
+      } else if (event.type === 'messageRecoveryFailed') {
+        await this.#events.emit('messageRecoveryFailed', event.payload);
+      } else if (event.type === 'messageDecodeFailure') {
+        await this.#events.emit('messageDecodeFailure', event.payload);
+      } else if (event.type === 'messageDiscarded') {
+        await this.#events.emit('messageDiscarded', event.payload);
       }
       await this.#refreshHealthState();
     });

@@ -60,6 +60,17 @@ export interface ProviderMessagingHealth {
   sent: number;
   received: number;
   failed: number;
+  decryptedPayloads: number;
+  unavailable: number;
+  resendRequested: number;
+  recovered: number;
+  recoveryFailed: number;
+  unavailableUnrecoverable: number;
+  decodeFailures: number;
+  unhandledStanzas: number;
+  ignoredOffline: number;
+  duplicates: number;
+  normalizationFailures: number;
   lastIncomingAt?: Date;
   lastOutgoingAt?: Date;
 }
@@ -110,9 +121,56 @@ export interface CryptoDegradedEvent {
   participantId?: string;
 }
 
+export interface MessageUnavailableEvent {
+  kind: 'view_once' | 'hosted' | 'bot' | 'other';
+  resendRequested: boolean;
+  occurredAt: Date;
+  messageId?: string;
+  chatId?: string;
+  participantId?: string;
+}
+
+export interface MessageRecoveredEvent {
+  recoveredAt: Date;
+  recoveryMs: number;
+  messageId?: string;
+  chatId?: string;
+  participantId?: string;
+}
+
+export interface MessageRecoveryFailedEvent {
+  failedAt: Date;
+  waitedMs: number;
+  messageId?: string;
+  chatId?: string;
+  participantId?: string;
+}
+
+export interface MessageDecodeFailureEvent {
+  occurredAt: Date;
+  reason: string;
+  stanzaId?: string;
+  chatId?: string;
+  encType?: string;
+}
+
+export type MessageDiscardReason = 'offline' | 'duplicate' | 'normalization_failed';
+
+export interface MessageDiscardedEvent {
+  reason: MessageDiscardReason;
+  occurredAt: Date;
+  messageId?: string;
+  chatId?: string;
+}
+
 export type ProviderStabilityEvent =
   | { type: 'groupMetadataRecovered'; payload: GroupMetadataRecoveredEvent }
   | { type: 'cryptoDegraded'; payload: CryptoDegradedEvent }
+  | { type: 'messageUnavailable'; payload: MessageUnavailableEvent }
+  | { type: 'messageRecovered'; payload: MessageRecoveredEvent }
+  | { type: 'messageRecoveryFailed'; payload: MessageRecoveryFailedEvent }
+  | { type: 'messageDecodeFailure'; payload: MessageDecodeFailureEvent }
+  | { type: 'messageDiscarded'; payload: MessageDiscardedEvent }
   | { type: 'healthRefresh'; payload: { occurredAt: Date } };
 
 export interface ProviderEvents {

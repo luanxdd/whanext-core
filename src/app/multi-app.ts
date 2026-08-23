@@ -338,6 +338,13 @@ function mergeCreateOptions(
     };
   }
 
+  if (shared.providerDiagnostics || account.providerDiagnostics) {
+    merged.providerDiagnostics = {
+      ...shared.providerDiagnostics,
+      ...account.providerDiagnostics,
+    };
+  }
+
   if (
     shared.logger
     && account.logger

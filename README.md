@@ -347,6 +347,19 @@ console.log(messaging.duplicates);
 
 `decryptedPayloads` conta payloads `<enc>` individuais, portanto pode ser maior que `received` em fanout para vários devices. O WhaNext usa esse sinal apenas para correlação e nunca expõe os bytes descriptografados no health, eventos públicos ou logs.
 
+Para diagnosticar mensagens que chegam ao socket mas não viram um `Message` público, ative a trilha de ingresso:
+
+```ts
+const app = await create({
+  providerDiagnostics: {
+    ingress: true,
+    ingressStallTimeoutMs: 10_000,
+  },
+});
+```
+
+Com essa opção, o provider registra apenas metadados seguros de stanzas `<message>` e correlaciona `debug_transport_node_in`, `debug_decrypted_payload`, `message`, `message_unavailable`, falhas de decrypt e falhas de decode. `health().messaging` também expõe `transportFramesIn`, `transportNodesIn`, `transportDecodeErrors`, `messageStanzasIn` e `ingressStalls`. Frames brutos, bytes descriptografados e texto das mensagens nunca são escritos nos logs.
+
 ```ts
 server.get('/health', async () => app.health());
 ```

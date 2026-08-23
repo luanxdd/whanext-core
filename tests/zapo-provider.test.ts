@@ -449,6 +449,121 @@ describe('ZapoProvider', () => {
     await provider.disconnect();
   });
 
+  it('tracks transport message stanzas through a normal terminal message event', async () => {
+    const { provider, client: current } = await connectedProvider({
+      auth: './session',
+      browser: Browser.Windows,
+      ingressDiagnostics: true,
+    });
+    const frame = new Uint8Array([1, 2, 3, 4]);
+    const node = {
+      tag: 'message',
+      attrs: {
+        id: 'ingress-ok',
+        from: '123@g.us',
+        participant: '200@lid',
+        type: 'text',
+        addressing_mode: 'lid',
+      },
+      content: [{ tag: 'enc', attrs: { type: 'skmsg' } }],
+    };
+
+    current.emit('debug_transport_frame_in', { frame });
+    current.emit('debug_transport_node_in', { node, frame });
+    current.emit('debug_decrypted_payload', {
+      rawNode: node,
+      stanzaId: 'ingress-ok',
+      chatJid: '123@g.us',
+      encIndex: 0,
+      encType: 'skmsg',
+      plaintext: new Uint8Array([1, 2, 3]),
+    });
+    current.emit('message', {
+      key: {
+        id: 'ingress-ok',
+        remoteJid: '123@g.us',
+        fromMe: false,
+        participant: '200@lid',
+      },
+      message: { conversation: '&menu' },
+      timestampSeconds: Math.floor(Date.now() / 1_000),
+    });
+    await flushAsync();
+
+    expect(provider.health().messaging).toMatchObject({
+      transportFramesIn: 1,
+      transportNodesIn: 1,
+      messageStanzasIn: 1,
+      decryptedPayloads: 1,
+      received: 1,
+      ingressStalls: 0,
+      transportDecodeErrors: 0,
+    });
+    await provider.disconnect();
+  });
+
+  it('reports a message stanza that never reaches a terminal provider event', async () => {
+    const { provider, client: current } = await connectedProvider({
+      auth: './session',
+      browser: Browser.Windows,
+      ingressDiagnostics: true,
+      ingressStallTimeoutMs: 1_000,
+    });
+    const stalls: string[] = [];
+    provider.on('stability', (event) => {
+      if (event.type === 'messageIngressStalled') stalls.push(event.payload.stanzaId);
+    });
+
+    vi.useFakeTimers();
+    try {
+      const frame = new Uint8Array([9, 8, 7]);
+      current.emit('debug_transport_node_in', {
+        frame,
+        node: {
+          tag: 'message',
+          attrs: {
+            id: 'ingress-stuck',
+            from: '123@g.us',
+            participant: '201@lid',
+            type: 'text',
+          },
+          content: [{ tag: 'enc', attrs: { type: 'skmsg' } }],
+        },
+      });
+      await vi.advanceTimersByTimeAsync(1_001);
+
+      expect(stalls).toEqual(['ingress-stuck']);
+      expect(provider.health().messaging).toMatchObject({
+        transportNodesIn: 1,
+        messageStanzasIn: 1,
+        ingressStalls: 1,
+      });
+      expect(provider.health().stability).toBe('degraded');
+    } finally {
+      vi.useRealTimers();
+      await provider.disconnect();
+    }
+  });
+
+  it('reports transport frames that fail binary-node decoding', async () => {
+    const { provider, client: current } = await connectedProvider();
+    const failures: string[] = [];
+    provider.on('stability', (event) => {
+      if (event.type === 'transportDecodeFailure') failures.push(event.payload.errorMessage);
+    });
+
+    current.emit('debug_transport_decode_error', {
+      error: new Error('invalid binary node'),
+      frame: new Uint8Array([1, 2, 3, 4, 5]),
+    });
+    await flushAsync();
+
+    expect(failures).toEqual(['invalid binary node']);
+    expect(provider.health().messaging.transportDecodeErrors).toBe(1);
+    expect(provider.health().stability).toBe('degraded');
+    await provider.disconnect();
+  });
+
   it('tracks crypto degradation warnings as typed stability signals', async () => {
     const { provider, client: current } = await connectedProvider();
     const kinds: string[] = [];

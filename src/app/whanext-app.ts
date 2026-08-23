@@ -38,6 +38,7 @@ import type {
   GroupMetadataRecoveredEvent,
   MessageDecodeFailureEvent,
   MessageDiscardedEvent,
+  MessageIngressStalledEvent,
   MessageRecoveredEvent,
   MessageRecoveryFailedEvent,
   MessageUnavailableEvent,
@@ -47,6 +48,7 @@ import type {
   ProviderMessagingHealth,
   ProviderTimeoutHealth,
   StabilityHealthStatus,
+  TransportDecodeFailureEvent,
   WhatsAppProvider,
 } from '@/provider/provider.js';
 import { AccountService } from '@/services/account-service.js';
@@ -86,6 +88,8 @@ export interface AppEvents {
   messageRecoveryFailed: MessageRecoveryFailedEvent;
   messageDecodeFailure: MessageDecodeFailureEvent;
   messageDiscarded: MessageDiscardedEvent;
+  messageIngressStalled: MessageIngressStalledEvent;
+  transportDecodeFailure: TransportDecodeFailureEvent;
   commandQueueTimeout: CommandQueueTimeoutEvent;
   commandQueueFull: CommandQueueFullEvent;
 }
@@ -220,6 +224,11 @@ export class WhaNextApp {
       ignoredOffline: 0,
       duplicates: 0,
       normalizationFailures: 0,
+      transportFramesIn: 0,
+      transportNodesIn: 0,
+      transportDecodeErrors: 0,
+      messageStanzasIn: 0,
+      ingressStalls: 0,
     };
     const crypto: ProviderCryptoHealth = provider?.crypto ?? {
       backend: 'unknown',
@@ -372,6 +381,10 @@ export class WhaNextApp {
         await this.#events.emit('messageDecodeFailure', event.payload);
       } else if (event.type === 'messageDiscarded') {
         await this.#events.emit('messageDiscarded', event.payload);
+      } else if (event.type === 'messageIngressStalled') {
+        await this.#events.emit('messageIngressStalled', event.payload);
+      } else if (event.type === 'transportDecodeFailure') {
+        await this.#events.emit('transportDecodeFailure', event.payload);
       }
       await this.#refreshHealthState();
     });

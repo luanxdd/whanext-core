@@ -71,6 +71,11 @@ export interface ProviderMessagingHealth {
   ignoredOffline: number;
   duplicates: number;
   normalizationFailures: number;
+  transportFramesIn: number;
+  transportNodesIn: number;
+  transportDecodeErrors: number;
+  messageStanzasIn: number;
+  ingressStalls: number;
   lastIncomingAt?: Date;
   lastOutgoingAt?: Date;
 }
@@ -163,6 +168,26 @@ export interface MessageDiscardedEvent {
   chatId?: string;
 }
 
+export type MessageIngressStage = 'stanza_received' | 'decrypted';
+
+export interface MessageIngressStalledEvent {
+  occurredAt: Date;
+  waitedMs: number;
+  lastStage: MessageIngressStage;
+  stanzaId: string;
+  chatId?: string;
+  participantId?: string;
+  stanzaType?: string;
+  addressingMode?: string;
+}
+
+export interface TransportDecodeFailureEvent {
+  occurredAt: Date;
+  frameBytes: number;
+  errorName: string;
+  errorMessage: string;
+}
+
 export type ProviderStabilityEvent =
   | { type: 'groupMetadataRecovered'; payload: GroupMetadataRecoveredEvent }
   | { type: 'cryptoDegraded'; payload: CryptoDegradedEvent }
@@ -171,6 +196,8 @@ export type ProviderStabilityEvent =
   | { type: 'messageRecoveryFailed'; payload: MessageRecoveryFailedEvent }
   | { type: 'messageDecodeFailure'; payload: MessageDecodeFailureEvent }
   | { type: 'messageDiscarded'; payload: MessageDiscardedEvent }
+  | { type: 'messageIngressStalled'; payload: MessageIngressStalledEvent }
+  | { type: 'transportDecodeFailure'; payload: TransportDecodeFailureEvent }
   | { type: 'healthRefresh'; payload: { occurredAt: Date } };
 
 export interface ProviderEvents {

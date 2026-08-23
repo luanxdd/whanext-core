@@ -2,6 +2,7 @@ export {
   create,
   type CreateOptions,
   type ProviderTimeoutOptions,
+  type ProviderDiagnosticsOptions,
   type ReconnectOptions,
 } from '@/app/create.js';
 export {
@@ -201,6 +202,8 @@ export type {
   MessageDecodeFailureEvent,
   MessageDiscardedEvent,
   MessageDiscardReason,
+  MessageIngressStage,
+  MessageIngressStalledEvent,
   MessageRecoveredEvent,
   MessageRecoveryFailedEvent,
   MessageUnavailableEvent,
@@ -214,5 +217,6 @@ export type {
   ProviderStabilityEvent,
   ProviderTimeoutHealth,
   StabilityHealthStatus,
+  TransportDecodeFailureEvent,
   WhatsAppProvider,
 } from '@/provider/provider.js';

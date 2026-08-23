@@ -15,6 +15,11 @@ export interface ProviderTimeoutOptions {
   nodeQueryTimeoutMs?: number;
 }
 
+export interface ProviderDiagnosticsOptions {
+  ingress?: boolean;
+  ingressStallTimeoutMs?: number;
+}
+
 export interface ReconnectOptions {
   enabled?: boolean;
   maxAttempts?: number;
@@ -33,6 +38,7 @@ export interface CreateOptions {
   router?: Omit<RouterOptions, 'prefix'>;
   reconnect?: ReconnectOptions;
   providerTimeouts?: ProviderTimeoutOptions;
+  providerDiagnostics?: ProviderDiagnosticsOptions;
   messageCacheSize?: number;
   processOfflineMessages?: boolean;
   provider?: WhatsAppProvider;
@@ -58,6 +64,12 @@ export async function create(options: CreateOptions = {}): Promise<WhaNextApp> {
       : {}),
     ...(options.providerTimeouts?.nodeQueryTimeoutMs !== undefined
       ? { nodeQueryTimeoutMs: options.providerTimeouts.nodeQueryTimeoutMs }
+      : {}),
+    ...(options.providerDiagnostics?.ingress !== undefined
+      ? { ingressDiagnostics: options.providerDiagnostics.ingress }
+      : {}),
+    ...(options.providerDiagnostics?.ingressStallTimeoutMs !== undefined
+      ? { ingressStallTimeoutMs: options.providerDiagnostics.ingressStallTimeoutMs }
       : {}),
   });
 

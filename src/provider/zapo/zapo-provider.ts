@@ -70,6 +70,8 @@ export interface ZapoProviderOptions {
   processOfflineMessages?: boolean;
   connectTimeoutMs?: number;
   nodeQueryTimeoutMs?: number;
+  ingressDiagnostics?: boolean;
+  ingressStallTimeoutMs?: number;
   reconnect?: {
     enabled?: boolean;
     maxAttempts?: number;
@@ -142,6 +144,7 @@ const sharedMediaProcessor = createMediaProcessor();
 const REMOTE_MEDIA_TIMEOUT_MS = 120_000;
 const DEFAULT_CONNECT_TIMEOUT_MS = 15_000;
 const DEFAULT_NODE_QUERY_TIMEOUT_MS = 30_000;
+const DEFAULT_INGRESS_STALL_TIMEOUT_MS = 10_000;
 const PROVIDER_DEGRADED_WINDOW_MS = 120_000;
 const GROUP_METADATA_CACHE_TTL_MS = 180_000;
 const DEVICE_LIST_CACHE_TTL_MS = 180_000;
@@ -231,7 +234,18 @@ interface ZapoCallEventLike {
 interface ZapoBinaryNodeLike {
   tag: string;
   attrs: Record<string, string>;
-  content?: ZapoBinaryNodeLike[];
+  content?: ZapoBinaryNodeLike[] | Uint8Array | string;
+}
+
+interface PendingIngressMessage {
+  observedAt: number;
+  lastStage: 'stanza_received' | 'decrypted';
+  timer: ReturnType<typeof setTimeout>;
+  stanzaId: string;
+  chatId?: string;
+  participantId?: string;
+  stanzaType?: string;
+  addressingMode?: string;
 }
 
 interface ZapoLowLevelLike {
@@ -277,6 +291,7 @@ export class ZapoProvider implements WhatsAppProvider {
   readonly #deliveredMessageStore = new Set<string>();
   readonly #pendingUnavailableRecoveries = new Map<string, PendingUnavailableRecovery>();
   readonly #recentDecryptedPayloads = new Map<string, RecentDecryptedPayload>();
+  readonly #pendingIngressMessages = new Map<string, PendingIngressMessage>();
   readonly #handledProtocolStore = new Set<string>();
   readonly #callCreatorStore = new Map<string, string>();
   readonly #groupMetadataRecoveryAt = new Map<string, number>();
@@ -285,6 +300,8 @@ export class ZapoProvider implements WhatsAppProvider {
   readonly #cryptoBackend: CryptoAccelerationBackend;
   readonly #connectTimeoutMs: number;
   readonly #nodeQueryTimeoutMs: number;
+  readonly #ingressDiagnostics: boolean;
+  readonly #ingressStallTimeoutMs: number;
   #protocolMutationQueue: Promise<void> = Promise.resolve();
   #state: ConnectionState = 'idle';
   #client: WaClient | undefined;
@@ -318,6 +335,11 @@ export class ZapoProvider implements WhatsAppProvider {
   #ignoredOfflineMessages = 0;
   #duplicateMessages = 0;
   #normalizationFailures = 0;
+  #transportFramesIn = 0;
+  #transportNodesIn = 0;
+  #transportDecodeErrors = 0;
+  #messageStanzasIn = 0;
+  #ingressStalls = 0;
   #lastIncomingAt: Date | undefined;
   #lastOutgoingAt: Date | undefined;
   #decryptFailures = 0;
@@ -336,6 +358,8 @@ export class ZapoProvider implements WhatsAppProvider {
     this.#messageCacheSize = Math.max(1, options.messageCacheSize ?? 1_000);
     this.#connectTimeoutMs = normalizeProviderTimeout(options.connectTimeoutMs, DEFAULT_CONNECT_TIMEOUT_MS);
     this.#nodeQueryTimeoutMs = normalizeProviderTimeout(options.nodeQueryTimeoutMs, DEFAULT_NODE_QUERY_TIMEOUT_MS);
+    this.#ingressDiagnostics = options.ingressDiagnostics === true;
+    this.#ingressStallTimeoutMs = normalizeProviderTimeout(options.ingressStallTimeoutMs, DEFAULT_INGRESS_STALL_TIMEOUT_MS);
     this.#cryptoBackend = detectCryptoBackend();
   }
 
@@ -382,6 +406,11 @@ export class ZapoProvider implements WhatsAppProvider {
         ignoredOffline: this.#ignoredOfflineMessages,
         duplicates: this.#duplicateMessages,
         normalizationFailures: this.#normalizationFailures,
+        transportFramesIn: this.#transportFramesIn,
+        transportNodesIn: this.#transportNodesIn,
+        transportDecodeErrors: this.#transportDecodeErrors,
+        messageStanzasIn: this.#messageStanzasIn,
+        ingressStalls: this.#ingressStalls,
         ...(this.#lastIncomingAt ? { lastIncomingAt: new Date(this.#lastIncomingAt) } : {}),
         ...(this.#lastOutgoingAt ? { lastOutgoingAt: new Date(this.#lastOutgoingAt) } : {}),
       },
@@ -437,6 +466,10 @@ export class ZapoProvider implements WhatsAppProvider {
       clearTimeout(pending.timer);
     }
     this.#pendingUnavailableRecoveries.clear();
+    for (const pending of this.#pendingIngressMessages.values()) {
+      clearTimeout(pending.timer);
+    }
+    this.#pendingIngressMessages.clear();
     this.#recentDecryptedPayloads.clear();
 
     const client = this.#client;
@@ -877,7 +910,25 @@ export class ZapoProvider implements WhatsAppProvider {
       void this.#stopTerminalConnection(client, error);
     });
 
+    client.on('debug_transport_frame_in', ({ frame }) => {
+      this.#transportFramesIn += 1;
+      if (this.#ingressDiagnostics) {
+        this.#logger.debug('Inbound WhatsApp transport frame received.', {
+          frameBytes: frame.byteLength,
+        });
+      }
+    });
+
+    client.on('debug_transport_node_in', ({ node }) => {
+      this.#handleTransportNodeIn(node as unknown as ZapoBinaryNodeLike);
+    });
+
+    client.on('debug_transport_decode_error', ({ error, frame }) => {
+      this.#handleTransportDecodeError(error, frame.byteLength);
+    });
+
     client.on('message', (event) => {
+      this.#resolveIngressMessage(event.key, 'message_event');
       const protocol = this.#protocolMessage(event as unknown as ZapoProtocolEventLike);
       if (protocol && this.#isMessageMutationProtocol(protocol.type)) {
         this.#enqueueProtocolEvent({
@@ -904,6 +955,7 @@ export class ZapoProvider implements WhatsAppProvider {
     });
 
     client.on('message_unavailable', (event) => {
+      this.#resolveIngressMessage(event.key, 'unavailable');
       this.#handleUnavailableMessage(event);
     });
 
@@ -953,6 +1005,163 @@ export class ZapoProvider implements WhatsAppProvider {
     });
   }
 
+  #handleTransportNodeIn(node: ZapoBinaryNodeLike): void {
+    this.#transportNodesIn += 1;
+    if (node.tag !== 'message') return;
+
+    this.#messageStanzasIn += 1;
+    const stanzaId = stringValue(node.attrs.id);
+    const chatId = normalizeIngressJid(stringValue(node.attrs.from));
+    const participantId = normalizeIngressJid(
+      stringValue(node.attrs.participant)
+      ?? stringValue(node.attrs.participant_pn)
+      ?? stringValue(node.attrs.participant_lid)
+      ?? stringValue(node.attrs.sender_pn)
+      ?? stringValue(node.attrs.sender_lid),
+    );
+    const stanzaType = stringValue(node.attrs.type);
+    const addressingMode = stringValue(node.attrs.addressing_mode);
+    const children = Array.isArray(node.content) ? node.content : [];
+    const childTags = [...new Set(children.map((child) => child.tag))];
+    const encTypes = [...new Set(children
+      .filter((child) => child.tag === 'enc')
+      .map((child) => stringValue(child.attrs.type))
+      .filter((value): value is string => value !== undefined))];
+
+    if (this.#ingressDiagnostics) {
+      this.#logger.info('Inbound WhatsApp message stanza observed.', {
+        ...(stanzaId ? { stanzaId } : {}),
+        ...(chatId ? { chatId } : {}),
+        ...(participantId ? { participantId } : {}),
+        ...(stanzaType ? { stanzaType } : {}),
+        ...(addressingMode ? { addressingMode } : {}),
+        ...(childTags.length > 0 ? { childTags } : {}),
+        ...(encTypes.length > 0 ? { encTypes } : {}),
+      });
+    }
+
+    const correlationKey = this.#stanzaCorrelationKey(chatId, stanzaId);
+    if (!correlationKey || !stanzaId) return;
+
+    const previous = this.#pendingIngressMessages.get(correlationKey);
+    if (previous) clearTimeout(previous.timer);
+    const observedAt = Date.now();
+    const timer = setTimeout(() => {
+      const pending = this.#pendingIngressMessages.get(correlationKey);
+      if (!pending || pending.observedAt !== observedAt) return;
+      this.#pendingIngressMessages.delete(correlationKey);
+      this.#ingressStalls += 1;
+      this.#markDegraded();
+      const occurredAt = new Date();
+      this.#emitStability({
+        type: 'messageIngressStalled',
+        payload: {
+          occurredAt,
+          waitedMs: occurredAt.getTime() - pending.observedAt,
+          lastStage: pending.lastStage,
+          stanzaId: pending.stanzaId,
+          ...(pending.chatId ? { chatId: pending.chatId } : {}),
+          ...(pending.participantId ? { participantId: pending.participantId } : {}),
+          ...(pending.stanzaType ? { stanzaType: pending.stanzaType } : {}),
+          ...(pending.addressingMode ? { addressingMode: pending.addressingMode } : {}),
+        },
+      });
+      this.#logger.warn('Inbound WhatsApp message stanza did not reach a terminal provider event.', {
+        stanzaId: pending.stanzaId,
+        ...(pending.chatId ? { chatId: pending.chatId } : {}),
+        ...(pending.participantId ? { participantId: pending.participantId } : {}),
+        lastStage: pending.lastStage,
+        waitedMs: occurredAt.getTime() - pending.observedAt,
+      });
+    }, this.#ingressStallTimeoutMs);
+
+    this.#pendingIngressMessages.set(correlationKey, {
+      observedAt,
+      lastStage: 'stanza_received',
+      timer,
+      stanzaId,
+      ...(chatId ? { chatId } : {}),
+      ...(participantId ? { participantId } : {}),
+      ...(stanzaType ? { stanzaType } : {}),
+      ...(addressingMode ? { addressingMode } : {}),
+    });
+  }
+
+  #handleTransportDecodeError(error: Error, frameBytes: number): void {
+    this.#transportDecodeErrors += 1;
+    this.#markDegraded();
+    const occurredAt = new Date();
+    this.#emitStability({
+      type: 'transportDecodeFailure',
+      payload: {
+        occurredAt,
+        frameBytes,
+        errorName: error.name || 'Error',
+        errorMessage: error.message || String(error),
+      },
+    });
+    this.#logger.warn('Inbound WhatsApp transport frame could not be decoded.', {
+      frameBytes,
+      errorName: error.name || 'Error',
+      errorMessage: error.message || String(error),
+    });
+  }
+
+  #markIngressDecrypted(chatId: string | undefined, stanzaId: string | undefined): void {
+    const correlationKey = this.#stanzaCorrelationKey(normalizeIngressJid(chatId), stanzaId);
+    if (!correlationKey) return;
+    const pending = this.#pendingIngressMessages.get(correlationKey);
+    if (!pending) return;
+    pending.lastStage = 'decrypted';
+    if (this.#ingressDiagnostics) {
+      this.#logger.info('Inbound WhatsApp message payload decrypted.', {
+        stanzaId: pending.stanzaId,
+        ...(pending.chatId ? { chatId: pending.chatId } : {}),
+        ...(pending.participantId ? { participantId: pending.participantId } : {}),
+      });
+    }
+  }
+
+  #resolveIngressMessage(
+    key: ZapoMessageKeyLike,
+    outcome: 'message_event' | 'unavailable' | 'decode_failure' | 'decrypt_failure',
+  ): void {
+    const chatId = normalizeIngressJid(key.remoteJid ?? undefined);
+    const correlationKey = this.#stanzaCorrelationKey(chatId, key.id ?? undefined);
+    if (!correlationKey) return;
+    const pending = this.#pendingIngressMessages.get(correlationKey);
+    if (!pending) return;
+    clearTimeout(pending.timer);
+    this.#pendingIngressMessages.delete(correlationKey);
+    if (this.#ingressDiagnostics) {
+      this.#logger.info('Inbound WhatsApp message stanza reached provider terminal stage.', {
+        stanzaId: pending.stanzaId,
+        ...(pending.chatId ? { chatId: pending.chatId } : {}),
+        ...(pending.participantId ? { participantId: pending.participantId } : {}),
+        lastStage: pending.lastStage,
+        outcome,
+        durationMs: Date.now() - pending.observedAt,
+      });
+    }
+  }
+
+  #resolveIngressByStanza(
+    chatId: string | undefined,
+    stanzaId: string | undefined,
+    outcome: 'decode_failure' | 'decrypt_failure',
+  ): void {
+    const normalizedChatId = normalizeIngressJid(chatId);
+    const correlationKey = this.#stanzaCorrelationKey(normalizedChatId, stanzaId);
+    if (!correlationKey) return;
+    const pending = this.#pendingIngressMessages.get(correlationKey);
+    if (!pending) return;
+    const remoteJid = pending.chatId ?? normalizedChatId;
+    this.#resolveIngressMessage({
+      id: pending.stanzaId,
+      ...(remoteJid ? { remoteJid } : {}),
+    }, outcome);
+  }
+
   #handleMessage(event: WaIncomingMessageEvent): void {
     const stored = event as unknown as StoredZapoMessage;
 
@@ -966,7 +1175,7 @@ export class ZapoProvider implements WhatsAppProvider {
     const deliveryKey = this.#messageDeliveryKey(stored.key);
     this.#resolveUnavailableRecovery(deliveryKey, stored.key);
     const decryptedCorrelationKey = this.#stanzaCorrelationKey(
-      stored.key.remoteJid ?? undefined,
+      normalizeIngressJid(stored.key.remoteJid ?? undefined),
       stored.key.id ?? undefined,
     );
     if (decryptedCorrelationKey) this.#recentDecryptedPayloads.delete(decryptedCorrelationKey);
@@ -1006,6 +1215,16 @@ export class ZapoProvider implements WhatsAppProvider {
     if (stored.key.id) this.#rememberDeliveredMessage(deliveryKey);
     this.#receivedMessages += 1;
     this.#lastIncomingAt = new Date();
+    if (this.#ingressDiagnostics) {
+      this.#logger.info('Inbound WhatsApp message emitted to WhaNext.', {
+        messageId: message.id,
+        chatId: message.chatId,
+        userId: message.sender.id,
+        contentKind: message.contentKind,
+        hasMedia: message.media !== undefined,
+        hasQuoted: message.quoted !== undefined,
+      });
+    }
     this.#messageKeyStore.set(message.keys, stored);
     if (message.quoted && quoted?.message) {
       this.#messageKeyStore.set(
@@ -1118,7 +1337,8 @@ export class ZapoProvider implements WhatsAppProvider {
 
   #handleDecryptedPayload(event: WaIncomingDecryptedPayloadEvent): void {
     this.#decryptedPayloads += 1;
-    const correlationKey = this.#stanzaCorrelationKey(event.chatJid, event.stanzaId);
+    this.#markIngressDecrypted(event.chatJid, event.stanzaId);
+    const correlationKey = this.#stanzaCorrelationKey(normalizeIngressJid(event.chatJid), event.stanzaId);
     if (!correlationKey) return;
     const now = Date.now();
     this.#recentDecryptedPayloads.set(correlationKey, {
@@ -1134,11 +1354,13 @@ export class ZapoProvider implements WhatsAppProvider {
 
   #handleUnhandledStanza(event: WaIncomingUnhandledStanzaEvent): void {
     this.#unhandledStanzas += 1;
-    const correlationKey = this.#stanzaCorrelationKey(event.chatJid, event.stanzaId);
+    const normalizedChatId = normalizeIngressJid(event.chatJid);
+    const correlationKey = this.#stanzaCorrelationKey(normalizedChatId, event.stanzaId);
     const decrypted = correlationKey ? this.#recentDecryptedPayloads.get(correlationKey) : undefined;
     const now = Date.now();
     if (decrypted && now - decrypted.observedAt <= DECRYPT_CORRELATION_TTL_MS) {
       this.#decodeFailures += 1;
+      this.#resolveIngressByStanza(normalizedChatId, event.stanzaId, 'decode_failure');
       this.#markDegraded();
       this.#emitStability({
         type: 'messageDecodeFailure',
@@ -1160,6 +1382,7 @@ export class ZapoProvider implements WhatsAppProvider {
       return;
     }
 
+    this.#resolveIngressByStanza(normalizedChatId, event.stanzaId, 'decode_failure');
     this.#logger.debug('Incoming stanza was not handled by Zapo.', {
       reason: event.reason,
       ...(event.stanzaId ? { stanzaId: event.stanzaId } : {}),
@@ -1547,6 +1770,11 @@ export class ZapoProvider implements WhatsAppProvider {
 
     if (message === 'failed to decrypt incoming message') {
       this.#decryptFailures += 1;
+      this.#resolveIngressByStanza(
+        stringValue(context.from) ?? stringValue(context.groupJid),
+        stringValue(context.id),
+        'decrypt_failure',
+      );
       const detail = stringValue(context.message);
       const kind: CryptoDegradationKind = detail === 'sender key id mismatch'
         ? 'sender_key_mismatch'
@@ -2975,6 +3203,14 @@ function booleanValue(value: unknown): boolean | undefined {
 function normalizeProviderTimeout(value: number | undefined, fallback: number): number {
   if (value === undefined || !Number.isFinite(value)) return fallback;
   return Math.max(1_000, Math.floor(value));
+}
+
+function normalizeIngressJid(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  const at = value.indexOf('@');
+  if (at <= 0) return value;
+  const local = value.slice(0, at).replace(/:\d+$/, '');
+  return `${local}${value.slice(at)}`;
 }
 
 function detectCryptoBackend(): CryptoAccelerationBackend {

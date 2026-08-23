@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.19.20
+
+### Ingress diagnostics
+- Added opt-in provider ingress tracing with `providerDiagnostics.ingress`, correlating Zapo transport message stanzas through decrypt and terminal provider events without logging message content or decrypted bytes.
+- Added a bounded ingress watchdog through `providerDiagnostics.ingressStallTimeoutMs`, defaulting to 10 seconds. A decoded `<message>` stanza that never becomes `message`, `message_unavailable`, a decode failure, or a decrypt failure emits `messageIngressStalled` and temporarily marks the provider as degraded.
+- Added transport decode diagnostics from Zapo 1.8.0 `debug_transport_decode_error` with a typed `transportDecodeFailure` event. Only frame size and error metadata are exposed; raw frame bytes are never logged or emitted.
+- Expanded `health().messaging` with `transportFramesIn`, `transportNodesIn`, `transportDecodeErrors`, `messageStanzasIn`, and `ingressStalls`.
+- When ingress diagnostics are enabled, message stanzas log their stanza id, chat, participant, addressing mode, encryption types, decrypt stage, and terminal provider stage. Message text and plaintext payloads are never included.
+
+### Reliability
+- Correlates decrypt warnings with pending message stanzas so known Signal failures do not appear as generic ingress stalls.
+- Normalizes device-qualified PN/LID JIDs before ingress correlation, keeping group and direct-message diagnostics aligned with Zapo message keys.
+
 ## 0.19.19
 
 ### Provider

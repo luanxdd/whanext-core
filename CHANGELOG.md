@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.19.22
+### Fixed
+- Corrige falsos `duplicate` em mensagens de grupo quando o Zapo emite primeiro um shell interno de Sender Key/protocolo sem conteúdo e depois a mensagem real reutilizando o mesmo stanza ID.
+- Shells vazios `unknown` não são mais publicados nem consomem a chave de deduplicação; a mensagem real de texto/mídia continua chegando normalmente ao dispatcher.
+
 ## 0.19.21
 
 ### Added

@@ -36,6 +36,7 @@ import type {
   ListContent,
   MediaSource,
   MentionTarget,
+  Message,
   MessageContent,
   MessageKey,
   PollContent,
@@ -1199,22 +1200,30 @@ export class ZapoProvider implements WhatsAppProvider {
       return;
     }
 
-    if (stored.key.id && this.#deliveredMessageStore.has(deliveryKey)) {
-      this.#duplicateMessages += 1;
-      this.#emitMessageDiscarded('duplicate', stored.key);
-      this.#logger.debug('Ignored duplicate Zapo message event.', {
-        messageId: stored.key.id,
-        chatId: stored.key.remoteJid ?? undefined,
-      });
-      return;
-    }
-
     const message = normalizeZapoMessage(event);
     if (!message) {
       this.#normalizationFailures += 1;
       this.#emitMessageDiscarded('normalization_failed', stored.key);
       this.#logger.warn('Could not normalize incoming Zapo message.', {
         messageId: stored.key.id ?? undefined,
+        chatId: stored.key.remoteJid ?? undefined,
+      });
+      return;
+    }
+
+    // Zapo may emit an intermediate sender-key/protocol shell and then reuse
+    // the same stanza id for the actual user message. An empty high-level
+    // shell must not consume the deduplication id, otherwise the real command
+    // is discarded as a duplicate before reaching the dispatcher.
+    if (this.#isEmptyMessageShell(message)) {
+      return;
+    }
+
+    if (stored.key.id && this.#deliveredMessageStore.has(deliveryKey)) {
+      this.#duplicateMessages += 1;
+      this.#emitMessageDiscarded('duplicate', stored.key);
+      this.#logger.debug('Ignored duplicate Zapo message event.', {
+        messageId: stored.key.id,
         chatId: stored.key.remoteJid ?? undefined,
       });
       return;
@@ -2598,6 +2607,16 @@ export class ZapoProvider implements WhatsAppProvider {
       });
       return undefined;
     }
+  }
+
+  #isEmptyMessageShell(message: Message): boolean {
+    return message.contentKind === 'unknown'
+      && message.text === undefined
+      && message.caption === undefined
+      && message.media === undefined
+      && message.interactive === undefined
+      && (message.protocolKinds?.length ?? 0) === 0
+      && (message.payloadKinds?.length ?? 0) === 0;
   }
 
   #messageStoreKey(key: ZapoMessageKeyLike): string {

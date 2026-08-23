@@ -1208,6 +1208,42 @@ describe('ZapoProvider', () => {
     expect(deleted).toEqual([{ id: 'bootstrap-target', text: 'guardada sem publicar' }]);
   });
 
+  it('does not let an empty sender-key shell consume the id of the real message', async () => {
+    const { provider, client: current } = await connectedProvider();
+    const received: Array<{ id: string; text: string | undefined; contentKind: string | undefined }> = [];
+    provider.on('message', (message) => {
+      received.push({ id: message.id, text: message.text, contentKind: message.contentKind });
+    });
+    const key = {
+      id: 'sender-key-upgrade',
+      remoteJid: '120363000000000000@g.us',
+      participant: '5511999999999@s.whatsapp.net',
+      fromMe: false,
+    };
+    const timestampSeconds = Math.floor(Date.now() / 1_000);
+
+    current.emit('message', {
+      key,
+      message: {
+        senderKeyDistributionMessage: {
+          groupId: '120363000000000000@g.us',
+          axolotlSenderKeyDistributionMessage: new Uint8Array([1, 2, 3]),
+        },
+      },
+      timestampSeconds,
+    });
+    current.emit('message', {
+      key,
+      message: { conversation: ',menu' },
+      timestampSeconds,
+    });
+    await flushAsync();
+
+    expect(received).toEqual([
+      { id: 'sender-key-upgrade', text: ',menu', contentKind: 'text' },
+    ]);
+  });
+
   it('publishes each Zapo message id only once per provider runtime', async () => {
     const { provider, client: current } = await connectedProvider();
     const received: string[] = [];

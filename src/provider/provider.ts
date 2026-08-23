@@ -5,6 +5,7 @@ import type {
   GroupSnapshot,
 } from '@/models/group.js';
 import type {
+  EditMessageOptions,
   Message,
   MessageContent,
   MessageDeleted,
@@ -227,7 +228,11 @@ export interface WhatsAppProvider {
   repostMessage(source: MessageKey, chatId: string, options?: RepostMessageOptions): Promise<SentMessage>;
   reactToMessage(key: MessageKey, emoji?: string): Promise<SentMessage>;
   downloadMedia(key: MessageKey): Promise<DownloadedMedia>;
-  editMessage(key: MessageKey, content: string): Promise<SentMessage>;
+  editMessage(
+    key: MessageKey,
+    content: string,
+    options?: EditMessageOptions,
+  ): Promise<SentMessage>;
   deleteMessage(key: MessageKey): Promise<void>;
   getGroup(groupId: string): Promise<GroupSnapshot>;
   setGroupAccess(groupId: string, access: GroupAccess): Promise<void>;

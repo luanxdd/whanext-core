@@ -161,6 +161,14 @@ export interface RepostMessageOptions {
   mentions?: readonly MentionTarget[];
 }
 
+export interface EditMessageOptions {
+  /**
+   * Overrides the stanza id used by the outgoing edit envelope.
+   * Advanced/protocol-level option; omitted for normal edits.
+   */
+  id?: string;
+}
+
 export interface TextContent {
   text: string;
   mentions?: MentionTarget[];

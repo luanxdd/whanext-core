@@ -4,6 +4,7 @@ import type {
 } from '@/models/group.js';
 import type {
   DownloadedMedia,
+  EditMessageOptions,
   MessageContent,
   MessageKey,
   RepostMessageOptions,
@@ -26,7 +27,7 @@ export class FakeProvider implements WhatsAppProvider {
   readonly rejectedCalls: Array<{ callId: string; from: string }> = [];
   readonly downloadedMedia: MessageKey[] = [];
   readonly reactions: Array<{ key: MessageKey; emoji?: string }> = [];
-  readonly edited: Array<{ key: MessageKey; text: string }> = [];
+  readonly edited: Array<{ key: MessageKey; text: string; options: EditMessageOptions }> = [];
   readonly calls = {
     getGroup: 0,
     setGroupAccess: 0,
@@ -117,8 +118,12 @@ export class FakeProvider implements WhatsAppProvider {
     };
   }
 
-  async editMessage(key: MessageKey, text: string): Promise<SentMessage> {
-    this.edited.push({ key, text });
+  async editMessage(
+    key: MessageKey,
+    text: string,
+    options: EditMessageOptions = {},
+  ): Promise<SentMessage> {
+    this.edited.push({ key, text, options });
     return { id: key.id, chatId: key.chatId, keys: key, timestamp: new Date() };
   }
 

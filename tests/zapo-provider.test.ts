@@ -657,7 +657,7 @@ describe('ZapoProvider', () => {
       mentions: ['100@lid'],
     }, key);
     await provider.reactToMessage(key, '❤️');
-    await provider.editMessage(key, 'novo texto');
+    await provider.editMessage(key, 'novo texto', { id: 'forced-edit-id' });
     await provider.deleteMessage(key);
     await provider.setMessagePin('123@g.us', key, true);
     await provider.setMessagePin('123@g.us', key, false);
@@ -685,7 +685,10 @@ describe('ZapoProvider', () => {
       3,
       '123@g.us',
       'novo texto',
-      { editKey: expect.objectContaining({ id: 'message-1' }) },
+      {
+        editKey: expect.objectContaining({ id: 'message-1' }),
+        id: 'forced-edit-id',
+      },
     );
     expect(current.message.send).toHaveBeenNthCalledWith(4, '123@g.us', {
       type: 'revoke',

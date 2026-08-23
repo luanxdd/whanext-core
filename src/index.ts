@@ -146,6 +146,7 @@ export type {
   ListRow,
   ListSection,
   DownloadedMedia,
+  EditMessageOptions,
   ImageContent,
   MediaKind,
   MessageContentKind,

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.19.21
+
+### Added
+- `MessageService.edit()` accepts an optional protocol-level `id` override for the outgoing edit envelope.
+
+### Zapo
+- Forwards the optional edit `id` to `WaSendMessageOptions.id`, enabling specialized moderation workflows without exposing the provider client.
+
 ## 0.19.20
 
 ### Ingress diagnostics

@@ -32,6 +32,7 @@ import { uniqueIdentities } from '@/models/identity.js';
 import type {
   ButtonsContent,
   DownloadedMedia,
+  EditMessageOptions,
   ListContent,
   MediaSource,
   MentionTarget,
@@ -655,12 +656,19 @@ export class ZapoProvider implements WhatsAppProvider {
     }
   }
 
-  async editMessage(key: MessageKey, content: string): Promise<SentMessage> {
+  async editMessage(
+    key: MessageKey,
+    content: string,
+    options: EditMessageOptions = {},
+  ): Promise<SentMessage> {
     return this.#trackOutgoing(async () => {
       const result = await this.#requireClient().message.send(
         key.chatId,
         content,
-        { editKey: this.#toZapoKey(key) },
+        {
+          editKey: this.#toZapoKey(key),
+          ...(options.id ? { id: options.id } : {}),
+        },
       );
 
       return this.#sent(result, key.chatId);

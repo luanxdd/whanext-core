@@ -1,5 +1,6 @@
 import type {
   ButtonsContent,
+  EditMessageOptions,
   ListContent,
   MentionTarget,
   Message,
@@ -41,9 +42,13 @@ export class MessageService {
     return this.#provider.repostMessage(key, chatId, options);
   }
 
-  edit(message: Message | SentMessage | MessageKey, text: string): Promise<SentMessage> {
+  edit(
+    message: Message | SentMessage | MessageKey,
+    text: string,
+    options: EditMessageOptions = {},
+  ): Promise<SentMessage> {
     const key = 'keys' in message ? message.keys : message;
-    return this.#provider.editMessage(key, text);
+    return this.#provider.editMessage(key, text, options);
   }
 
   delete(message: Message | SentMessage | MessageKey): Promise<void> {

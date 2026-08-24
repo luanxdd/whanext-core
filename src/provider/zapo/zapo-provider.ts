@@ -248,6 +248,14 @@ interface PendingIngressMessage {
   participantId?: string;
   stanzaType?: string;
   addressingMode?: string;
+  encTypes?: string[];
+  decryptFail?: string;
+}
+
+interface IngressCryptoMetadata {
+  participantId?: string;
+  encType?: string;
+  decryptFail?: string;
 }
 
 interface ZapoLowLevelLike {
@@ -1050,6 +1058,13 @@ export class ZapoProvider implements WhatsAppProvider {
       .filter((child) => child.tag === 'enc')
       .map((child) => stringValue(child.attrs.type))
       .filter((value): value is string => value !== undefined))];
+    const childDecryptFailures = children
+      .filter((child) => child.tag === 'enc')
+      .map((child) => stringValue(child.attrs['decrypt-fail']))
+      .filter((value): value is string => value !== undefined);
+    const decryptFail = stringValue(node.attrs['decrypt-fail'])
+      ?? childDecryptFailures.find((value) => value === 'hide')
+      ?? childDecryptFailures[0];
 
     if (this.#ingressDiagnostics) {
       this.#logger.info('Inbound WhatsApp message stanza observed.', {
@@ -1060,6 +1075,7 @@ export class ZapoProvider implements WhatsAppProvider {
         ...(addressingMode ? { addressingMode } : {}),
         ...(childTags.length > 0 ? { childTags } : {}),
         ...(encTypes.length > 0 ? { encTypes } : {}),
+        ...(decryptFail ? { decryptFail } : {}),
       });
     }
 
@@ -1107,6 +1123,8 @@ export class ZapoProvider implements WhatsAppProvider {
       ...(participantId ? { participantId } : {}),
       ...(stanzaType ? { stanzaType } : {}),
       ...(addressingMode ? { addressingMode } : {}),
+      ...(encTypes.length > 0 ? { encTypes } : {}),
+      ...(decryptFail ? { decryptFail } : {}),
     });
   }
 
@@ -1801,6 +1819,7 @@ export class ZapoProvider implements WhatsAppProvider {
 
     if (message === 'failed to decrypt incoming message') {
       this.#decryptFailures += 1;
+      const ingressMetadata = this.#ingressCryptoMetadata(context);
       this.#resolveIngressByStanza(
         stringValue(context.from) ?? stringValue(context.groupJid),
         stringValue(context.id),
@@ -1812,7 +1831,7 @@ export class ZapoProvider implements WhatsAppProvider {
         : 'decrypt_failure';
       if (kind === 'sender_key_mismatch') this.#senderKeyMismatches += 1;
       this.#markDegraded();
-      this.#emitCryptoDegraded(kind, context);
+      this.#emitCryptoDegraded(kind, context, ingressMetadata);
       return;
     }
 
@@ -1826,10 +1845,14 @@ export class ZapoProvider implements WhatsAppProvider {
   #emitCryptoDegraded(
     kind: CryptoDegradationKind,
     context: Readonly<Record<string, unknown>>,
+    ingressMetadata: IngressCryptoMetadata = {},
   ): void {
     const messageId = stringValue(context.id);
     const chatId = stringValue(context.from) ?? stringValue(context.groupJid);
-    const participantId = stringValue(context.participant);
+    const participantId = ingressMetadata.participantId
+      ?? normalizeIngressJid(stringValue(context.participant));
+    const encType = stringValue(context.encType) ?? ingressMetadata.encType;
+    const decryptFail = ingressMetadata.decryptFail;
     this.#emitStability({
       type: 'cryptoDegraded',
       payload: {
@@ -1838,8 +1861,30 @@ export class ZapoProvider implements WhatsAppProvider {
         ...(messageId ? { messageId } : {}),
         ...(chatId ? { chatId } : {}),
         ...(participantId ? { participantId } : {}),
+        ...(encType ? { encType } : {}),
+        ...(decryptFail ? { decryptFail } : {}),
+        ...(decryptFail === 'hide' ? { isStealth: true as const } : {}),
       },
     });
+  }
+
+  #ingressCryptoMetadata(
+    context: Readonly<Record<string, unknown>>,
+  ): IngressCryptoMetadata {
+    const chatId = normalizeIngressJid(
+      stringValue(context.from) ?? stringValue(context.groupJid),
+    );
+    const messageId = stringValue(context.id);
+    const correlationKey = this.#stanzaCorrelationKey(chatId, messageId);
+    const pending = correlationKey
+      ? this.#pendingIngressMessages.get(correlationKey)
+      : undefined;
+
+    return {
+      ...(pending?.participantId ? { participantId: pending.participantId } : {}),
+      ...(pending?.encTypes?.[0] ? { encType: pending.encTypes[0] } : {}),
+      ...(pending?.decryptFail ? { decryptFail: pending.decryptFail } : {}),
+    };
   }
 
   #markDegraded(): void {

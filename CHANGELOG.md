@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.19.24
+
+### Segurança
+- O provider Zapo agora preserva o metadado seguro `decrypt-fail` de envelopes criptografados que não chegam ao handler de mensagens.
+- O evento tipado `cryptoDegraded` passou a expor opcionalmente `encType`, `decryptFail` e `isStealth: true`, além do grupo e participante normalizados, permitindo que bots detectem cobranças ocultas direcionadas a administradores sem acessar ou registrar ciphertext.
+- Falhas comuns de Sender Key continuam sendo reportadas sem `isStealth`, evitando que uma única falha legítima seja tratada como ataque.
+
+### Testes
+- Adicionada regressão para `decrypt-fail="hide"` em `skmsg` de grupo e controle negativo para falhas normais de descriptografia.
+
 ## 0.19.23
 
 ### Adicionado

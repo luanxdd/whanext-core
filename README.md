@@ -413,8 +413,15 @@ app.on('groupMetadataRecovered', ({ groupId }) => {
   console.log(groupId);
 });
 
-app.on('cryptoDegraded', ({ kind, chatId }) => {
-  console.log(kind, chatId);
+app.on('cryptoDegraded', ({
+  kind,
+  chatId,
+  participantId,
+  encType,
+  decryptFail,
+  isStealth,
+}) => {
+  console.log(kind, chatId, participantId, encType, decryptFail, isStealth);
 });
 
 app.on('messageUnavailable', ({ messageId, resendRequested }) => {
@@ -447,6 +454,8 @@ app.on('commandQueueFull', ({ command, queued }) => {
 ```
 
 Falhas criptográficas transitórias deixam o provider em `degraded` por uma janela curta; a volta para `healthy` também dispara `healthChanged`. A recuperação de metadata por `phash` continua específica ao grupo afetado e não apaga Sender Keys nem sessões Signal.
+
+Quando um remetente retém a Sender Key de destinatários específicos e marca o envelope com `decrypt-fail="hide"`, o conteúdo não pode ser normalizado como `Message`. O evento `cryptoDegraded` ainda preserva `chatId`, `participantId`, `encType` e `decryptFail`, e define `isStealth: true`. Esse é um sinal de alta confiança para moderação de cobranças ocultas, mas o Core não remove participantes automaticamente: a política e as exceções de administrador continuam pertencendo ao bot. Falhas comuns de descriptografia não recebem `isStealth`.
 
 ## Usuários
 

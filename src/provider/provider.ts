@@ -125,6 +125,15 @@ export interface CryptoDegradedEvent {
   messageId?: string;
   chatId?: string;
   participantId?: string;
+  /** Signal envelope type that failed to decrypt, such as `skmsg`. */
+  encType?: string;
+  /** Raw safe metadata from the `<enc decrypt-fail="...">` envelope. */
+  decryptFail?: string;
+  /**
+   * High-confidence signal that the sender intentionally asked clients to hide
+   * a payload that selected recipients could not decrypt.
+   */
+  isStealth?: true;
 }
 
 export interface MessageUnavailableEvent {

@@ -6,6 +6,7 @@ import {
   vi,
 } from 'vitest';
 import { Browser } from '@/auth/browser.js';
+import type { CryptoDegradedEvent } from '@/provider/provider.js';
 import { ZapoProvider } from '@/provider/zapo/zapo-provider.js';
 
 const { mocks, MockClient } = vi.hoisted(() => {
@@ -566,15 +567,40 @@ describe('ZapoProvider', () => {
 
   it('tracks crypto degradation warnings as typed stability signals', async () => {
     const { provider, client: current } = await connectedProvider();
-    const kinds: string[] = [];
+    const events: Array<{
+      kind: string;
+      chatId?: string;
+      participantId?: string;
+      encType?: string;
+      decryptFail?: string;
+      isStealth?: true;
+    }> = [];
     provider.on('stability', (event) => {
-      if (event.type === 'cryptoDegraded') kinds.push(event.payload.kind);
+      if (event.type === 'cryptoDegraded') events.push(event.payload);
+    });
+
+    const stealthNode = {
+      tag: 'message',
+      attrs: {
+        id: 'message-1',
+        from: '123@g.us',
+        participant: '456:7@lid',
+        type: 'text',
+      },
+      content: [{
+        tag: 'enc',
+        attrs: { type: 'skmsg', 'decrypt-fail': 'hide' },
+      }],
+    };
+    current.emit('debug_transport_node_in', {
+      node: stealthNode,
+      frame: new Uint8Array([1, 2, 3]),
     });
 
     (current.logger as any).warn('failed to decrypt incoming message', {
       id: 'message-1',
       from: '123@g.us',
-      participant: '456@lid',
+      participant: '456:7@lid',
       encType: 'skmsg',
       message: 'sender key id mismatch',
     });
@@ -584,13 +610,71 @@ describe('ZapoProvider', () => {
     });
     await flushAsync();
 
-    expect(kinds).toEqual(['sender_key_mismatch', 'addon_decrypt_failure']);
+    expect(events).toEqual([
+      {
+        kind: 'sender_key_mismatch',
+        occurredAt: expect.any(Date),
+        messageId: 'message-1',
+        chatId: '123@g.us',
+        participantId: '456@lid',
+        encType: 'skmsg',
+        decryptFail: 'hide',
+        isStealth: true,
+      },
+      {
+        kind: 'addon_decrypt_failure',
+        occurredAt: expect.any(Date),
+        messageId: 'message-2',
+      },
+    ]);
     expect(provider.health().stability).toBe('degraded');
     expect(provider.health().crypto).toMatchObject({
       decryptFailures: 1,
       addonDecryptFailures: 1,
       senderKeyMismatches: 1,
     });
+    await provider.disconnect();
+  });
+
+  it('does not classify an ordinary decrypt failure as stealth', async () => {
+    const { provider, client: current } = await connectedProvider();
+    const failures: CryptoDegradedEvent[] = [];
+    provider.on('stability', (event) => {
+      if (event.type === 'cryptoDegraded') failures.push(event.payload);
+    });
+
+    current.emit('debug_transport_node_in', {
+      frame: new Uint8Array([4, 5, 6]),
+      node: {
+        tag: 'message',
+        attrs: {
+          id: 'ordinary-failure',
+          from: '123@g.us',
+          participant: '789@lid',
+          type: 'text',
+        },
+        content: [{ tag: 'enc', attrs: { type: 'skmsg' } }],
+      },
+    });
+    (current.logger as any).warn('failed to decrypt incoming message', {
+      id: 'ordinary-failure',
+      from: '123@g.us',
+      participant: '789@lid',
+      encType: 'skmsg',
+      message: 'sender key id mismatch',
+    });
+    await flushAsync();
+
+    expect(failures).toHaveLength(1);
+    expect(failures[0]).toMatchObject({
+      kind: 'sender_key_mismatch',
+      messageId: 'ordinary-failure',
+      chatId: '123@g.us',
+      participantId: '789@lid',
+      encType: 'skmsg',
+    });
+    expect(failures[0]).not.toHaveProperty('decryptFail');
+    expect(failures[0]).not.toHaveProperty('isStealth');
     await provider.disconnect();
   });
 

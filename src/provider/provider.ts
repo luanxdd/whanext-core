@@ -228,6 +228,7 @@ export interface WhatsAppProvider {
   repostMessage(source: MessageKey, chatId: string, options?: RepostMessageOptions): Promise<SentMessage>;
   reactToMessage(key: MessageKey, emoji?: string): Promise<SentMessage>;
   downloadMedia(key: MessageKey): Promise<DownloadedMedia>;
+  getProfilePictureUrl?(userId: string): Promise<string | undefined>;
   editMessage(
     key: MessageKey,
     content: string,

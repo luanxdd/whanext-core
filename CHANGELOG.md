@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.19.23
+
+### Adicionado
+- `UserService.profilePictureUrl()` para consultar a foto de perfil de um usuário quando o provider oferecer suporte.
+- Provider Zapo agora usa `WaClient.profile.getProfilePicture()` para expor a URL da foto de perfil sem vazar a API do provider.
+
+### Corrigido
+- Incluído o type import de `Message` usado pelo filtro de shells vazios do Zapo.
+
 ## 0.19.22
 ### Fixed
 - Corrige falsos `duplicate` em mensagens de grupo quando o Zapo emite primeiro um shell interno de Sender Key/protocolo sem conteúdo e depois a mensagem real reutilizando o mesmo stanza ID.

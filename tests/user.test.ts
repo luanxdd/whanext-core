@@ -53,6 +53,30 @@ describe('User', () => {
     expect(args.remaining).toBe(0);
   });
 
+
+  it('exposes a profile picture URL through the active provider', async () => {
+    class ProfileProvider extends FakeProvider {
+      async getProfilePictureUrl(userId: string): Promise<string | undefined> {
+        return userId === '5511000000000@s.whatsapp.net'
+          ? 'https://example.com/avatar.jpg'
+          : undefined;
+      }
+    }
+
+    const provider = new ProfileProvider();
+    const app = await create({ provider });
+    const user = new User({
+      id: '200000000000001@lid',
+      identities: ['200000000000001@lid', '5511000000000@s.whatsapp.net'],
+      jid: '5511000000000@s.whatsapp.net',
+      lid: '200000000000001@lid',
+      phoneNumber: '5511000000000@s.whatsapp.net',
+    });
+
+    await expect(app.user.profilePictureUrl(user))
+      .resolves.toBe('https://example.com/avatar.jpg');
+  });
+
   it('creates a mentionable user from a plain phone number', async () => {
     const provider = new FakeProvider();
     const app = await create({ provider });

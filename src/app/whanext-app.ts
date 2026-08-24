@@ -166,7 +166,7 @@ export class WhaNextApp {
     this.message = new MessageService(provider);
     this.media = new MediaService(provider);
     this.chat = new ChatService(provider);
-    this.user = new UserService(this.group);
+    this.user = new UserService(this.group, provider);
     const muteEnabled = options.mute?.enabled === true || options.mute?.store !== undefined;
     const muteStore = muteEnabled
       ? options.mute?.store ?? new SqliteMuteStore(options.mute?.database)

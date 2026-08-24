@@ -657,6 +657,20 @@ export class ZapoProvider implements WhatsAppProvider {
     }
   }
 
+
+  async getProfilePictureUrl(userId: string): Promise<string | undefined> {
+    const target = userId.trim();
+    if (!target) return undefined;
+
+    try {
+      const picture = await this.#requireClient().profile.getProfilePicture(target, 'image');
+      return picture.url || undefined;
+    } catch {
+      // Profile-picture visibility is privacy-gated by WhatsApp.
+      return undefined;
+    }
+  }
+
   async editMessage(
     key: MessageKey,
     content: string,

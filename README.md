@@ -331,7 +331,7 @@ console.log(health.timeouts);
 
 `status` continua representando o ciclo da aplicação: `idle`, `starting`, `ready` ou `stopped`. `stability` representa a saúde operacional do provider: `healthy`, `degraded`, `reconnecting` ou `offline`.
 
-O provider Zapo contabiliza reconexões, mensagens enviadas/recebidas, falhas de envio, falhas de descriptografia, `sender key id mismatch`, falhas de addons, divergências de `phash` e recuperações de metadata. Com Zapo 1.8.0, `health.messaging` também mostra mensagens indisponíveis, pedidos de resend, recuperações, payloads descriptografados, falhas de decode, stanzas não tratadas, duplicatas, mensagens offline ignoradas e falhas de normalização. O router contabiliza execuções ativas, fila atual, expirações e rejeições por fila cheia.
+O provider Zapo contabiliza reconexões, mensagens enviadas/recebidas, falhas de envio, falhas de descriptografia, `sender key id mismatch`, falhas de addons, divergências de `phash` e recuperações de metadata. Com Zapo 1.8.1, `health.messaging` também mostra mensagens indisponíveis, pedidos de resend, recuperações, payloads descriptografados, falhas de decode, stanzas não tratadas, duplicatas, mensagens offline ignoradas e falhas de normalização. O router contabiliza execuções ativas, fila atual, expirações e rejeições por fila cheia.
 
 ```ts
 const { messaging } = app.health();
@@ -419,17 +419,16 @@ app.on('cryptoDegraded', ({
   participantId,
   encType,
   decryptFail,
-  isStealth,
 }) => {
-  console.log(kind, chatId, participantId, encType, decryptFail, isStealth);
+  console.log(kind, chatId, participantId, encType, decryptFail);
 });
 
 app.on('messageUnavailable', ({ messageId, resendRequested }) => {
   console.log(messageId, resendRequested);
 });
 
-app.on('messageRecovered', ({ messageId, recoveryMs }) => {
-  console.log(messageId, recoveryMs);
+app.on('messageRecovered', ({ messageId, recoveryMs, source }) => {
+  console.log(messageId, recoveryMs, source);
 });
 
 app.on('messageRecoveryFailed', ({ messageId, waitedMs }) => {
@@ -455,7 +454,7 @@ app.on('commandQueueFull', ({ command, queued }) => {
 
 Falhas criptográficas transitórias deixam o provider em `degraded` por uma janela curta; a volta para `healthy` também dispara `healthChanged`. A recuperação de metadata por `phash` continua específica ao grupo afetado e não apaga Sender Keys nem sessões Signal.
 
-Quando um remetente retém a Sender Key de destinatários específicos e marca o envelope com `decrypt-fail="hide"`, o conteúdo não pode ser normalizado como `Message`. O evento `cryptoDegraded` ainda preserva `chatId`, `participantId`, `encType` e `decryptFail`, e define `isStealth: true`. Esse é um sinal de alta confiança para moderação de cobranças ocultas, mas o Core não remove participantes automaticamente: a política e as exceções de administrador continuam pertencendo ao bot. Falhas comuns de descriptografia não recebem `isStealth`.
+`cryptoDegraded` é somente diagnóstico de transporte. `decrypt-fail="hide"` não identifica pagamento, conteúdo ou intenção e nunca deve ser usado isoladamente para punir um participante. O provider acompanha a falha pela chave `grupo + stanzaId`; se o retry do remetente ou o reenvio do aparelho principal entregar o payload, o conteúdo normalizado é publicado no evento `message` e `messageRecovered` informa a origem da recuperação. Se o conteúdo não puder ser recuperado, nenhuma classificação de mensagem é inventada pelo Core.
 
 ## Usuários
 

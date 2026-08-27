@@ -6,7 +6,11 @@ import {
   vi,
 } from 'vitest';
 import { Browser } from '@/auth/browser.js';
-import type { CryptoDegradedEvent } from '@/provider/provider.js';
+import type { Message } from '@/models/message.js';
+import type {
+  CryptoDegradedEvent,
+  MessageRecoveredEvent,
+} from '@/provider/provider.js';
 import { ZapoProvider } from '@/provider/zapo/zapo-provider.js';
 
 const { mocks, MockClient } = vi.hoisted(() => {
@@ -565,7 +569,7 @@ describe('ZapoProvider', () => {
     await provider.disconnect();
   });
 
-  it('tracks crypto degradation warnings as typed stability signals', async () => {
+  it('tracks crypto degradation as diagnostic metadata without content classification', async () => {
     const { provider, client: current } = await connectedProvider();
     const events: Array<{
       kind: string;
@@ -573,7 +577,6 @@ describe('ZapoProvider', () => {
       participantId?: string;
       encType?: string;
       decryptFail?: string;
-      isStealth?: true;
     }> = [];
     provider.on('stability', (event) => {
       if (event.type === 'cryptoDegraded') events.push(event.payload);
@@ -619,7 +622,6 @@ describe('ZapoProvider', () => {
         participantId: '456@lid',
         encType: 'skmsg',
         decryptFail: 'hide',
-        isStealth: true,
       },
       {
         kind: 'addon_decrypt_failure',
@@ -633,6 +635,67 @@ describe('ZapoProvider', () => {
       addonDecryptFailures: 1,
       senderKeyMismatches: 1,
     });
+    await provider.disconnect();
+  });
+
+  it('correlates sender retry recovery without classifying transport metadata as payment', async () => {
+    const { provider, client: current } = await connectedProvider();
+    const recovered: MessageRecoveredEvent[] = [];
+    const messages: Message[] = [];
+    provider.on('stability', (event) => {
+      if (event.type === 'messageRecovered') recovered.push(event.payload);
+    });
+    provider.on('message', (message) => {
+      messages.push(message);
+    });
+
+    current.emit('debug_transport_node_in', {
+      frame: new Uint8Array([1, 2, 3]),
+      node: {
+        tag: 'message',
+        attrs: {
+          id: 'retry-payment',
+          from: '123@g.us',
+          participant: '456:7@lid',
+          type: 'text',
+        },
+        content: [{
+          tag: 'enc',
+          attrs: { type: 'skmsg', 'decrypt-fail': 'hide' },
+        }],
+      },
+    });
+    (current.logger as any).warn('failed to decrypt incoming message', {
+      id: 'retry-payment',
+      from: '123@g.us',
+      participant: '456:7@lid',
+      encType: 'skmsg',
+      message: 'sender key id mismatch',
+    });
+    current.emit('message', {
+      key: {
+        id: 'retry-payment',
+        remoteJid: '123@g.us',
+        fromMe: false,
+        participant: '456:7@lid',
+      },
+      message: { conversation: 'conteúdo recuperado' },
+      timestampSeconds: Math.floor(Date.now() / 1_000),
+    });
+    await flushAsync();
+
+    expect(recovered).toEqual([{
+      recoveredAt: expect.any(Date),
+      recoveryMs: expect.any(Number),
+      source: 'sender_retry',
+      originalFailure: 'sender_key_mismatch',
+      messageId: 'retry-payment',
+      chatId: '123@g.us',
+      participantId: '456:7@lid',
+    }]);
+    expect(messages).toHaveLength(1);
+    expect(messages[0]?.text).toBe('conteúdo recuperado');
+    expect(provider.health().messaging).toMatchObject({ recovered: 1, received: 1 });
     await provider.disconnect();
   });
 

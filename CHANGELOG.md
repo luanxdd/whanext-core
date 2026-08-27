@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.19.25
+
+### Segurança
+- `decrypt-fail="hide"` volta a ser tratado exclusivamente como metadado diagnóstico; o Core não define mais `isStealth` nem sugere punição sem conteúdo descriptografado.
+- Falhas de Sender Key são correlacionadas por grupo e stanza ID com a mensagem entregue posteriormente pelo retry, e somente mensagens realmente normalizadas chegam ao bot.
+
+### Recuperação
+- Atualizado `zapo-js` para 1.8.1, que permite que a escada de retry alcance a terceira tentativa antes do fallback de placeholder.
+- `messageRecovered` e `messageRecoveryFailed` agora informam se a recuperação veio do retry do remetente ou do reenvio do aparelho principal, além da falha criptográfica original quando disponível.
+
+### Testes
+- Adicionada regressão que começa com `skmsg decrypt-fail="hide"`, recebe depois o mesmo stanza descriptografado e confirma que somente o conteúdo real é publicado.
+
 ## 0.19.24
 
 ### Segurança

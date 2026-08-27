@@ -170,9 +170,11 @@ interface ZapoPublishResultLike {
   id?: string | null;
 }
 
-interface PendingUnavailableRecovery {
+interface PendingMessageRecovery {
   requestedAt: number;
   timer: ReturnType<typeof setTimeout>;
+  source: 'sender_retry' | 'primary_device_resend';
+  originalFailure?: CryptoDegradationKind;
   messageId?: string;
   chatId?: string;
   participantId?: string;
@@ -299,7 +301,7 @@ export class ZapoProvider implements WhatsAppProvider {
   readonly #messageStore = new Map<string, StoredZapoMessage>();
   readonly #messageKeyStore = new WeakMap<MessageKey, StoredZapoMessage>();
   readonly #deliveredMessageStore = new Set<string>();
-  readonly #pendingUnavailableRecoveries = new Map<string, PendingUnavailableRecovery>();
+  readonly #pendingMessageRecoveries = new Map<string, PendingMessageRecovery>();
   readonly #recentDecryptedPayloads = new Map<string, RecentDecryptedPayload>();
   readonly #pendingIngressMessages = new Map<string, PendingIngressMessage>();
   readonly #handledProtocolStore = new Set<string>();
@@ -472,10 +474,10 @@ export class ZapoProvider implements WhatsAppProvider {
       clearTimeout(this.#healthRefreshTimer);
       this.#healthRefreshTimer = undefined;
     }
-    for (const pending of this.#pendingUnavailableRecoveries.values()) {
+    for (const pending of this.#pendingMessageRecoveries.values()) {
       clearTimeout(pending.timer);
     }
-    this.#pendingUnavailableRecoveries.clear();
+    this.#pendingMessageRecoveries.clear();
     for (const pending of this.#pendingIngressMessages.values()) {
       clearTimeout(pending.timer);
     }
@@ -1214,7 +1216,6 @@ export class ZapoProvider implements WhatsAppProvider {
     }
 
     const deliveryKey = this.#messageDeliveryKey(stored.key);
-    this.#resolveUnavailableRecovery(deliveryKey, stored.key);
     const decryptedCorrelationKey = this.#stanzaCorrelationKey(
       normalizeIngressJid(stored.key.remoteJid ?? undefined),
       stored.key.id ?? undefined,
@@ -1250,6 +1251,8 @@ export class ZapoProvider implements WhatsAppProvider {
     if (this.#isEmptyMessageShell(message)) {
       return;
     }
+
+    this.#resolveMessageRecovery(deliveryKey, stored.key);
 
     if (stored.key.id && this.#deliveredMessageStore.has(deliveryKey)) {
       this.#duplicateMessages += 1;
@@ -1318,13 +1321,13 @@ export class ZapoProvider implements WhatsAppProvider {
 
     this.#resendRequestedMessages += 1;
     const deliveryKey = this.#messageDeliveryKey(event.key);
-    const previous = this.#pendingUnavailableRecoveries.get(deliveryKey);
+    const previous = this.#pendingMessageRecoveries.get(deliveryKey);
     if (previous) clearTimeout(previous.timer);
     const requestedAt = Date.now();
     const timer = setTimeout(() => {
-      const pending = this.#pendingUnavailableRecoveries.get(deliveryKey);
+      const pending = this.#pendingMessageRecoveries.get(deliveryKey);
       if (!pending || pending.requestedAt !== requestedAt) return;
-      this.#pendingUnavailableRecoveries.delete(deliveryKey);
+      this.#pendingMessageRecoveries.delete(deliveryKey);
       this.#recoveryFailedMessages += 1;
       this.#markDegraded();
       const failedAt = new Date();
@@ -1333,6 +1336,8 @@ export class ZapoProvider implements WhatsAppProvider {
         payload: {
           failedAt,
           waitedMs: failedAt.getTime() - pending.requestedAt,
+          source: pending.source,
+          ...(pending.originalFailure ? { originalFailure: pending.originalFailure } : {}),
           ...(pending.messageId ? { messageId: pending.messageId } : {}),
           ...(pending.chatId ? { chatId: pending.chatId } : {}),
           ...(pending.participantId ? { participantId: pending.participantId } : {}),
@@ -1345,9 +1350,10 @@ export class ZapoProvider implements WhatsAppProvider {
       });
     }, MESSAGE_RECOVERY_TIMEOUT_MS);
 
-    this.#pendingUnavailableRecoveries.set(deliveryKey, {
+    this.#pendingMessageRecoveries.set(deliveryKey, {
       requestedAt,
       timer,
+      source: 'primary_device_resend',
       ...(messageId ? { messageId } : {}),
       ...(chatId ? { chatId } : {}),
       ...(participantId ? { participantId } : {}),
@@ -1359,11 +1365,11 @@ export class ZapoProvider implements WhatsAppProvider {
     });
   }
 
-  #resolveUnavailableRecovery(deliveryKey: string, key: ZapoMessageKeyLike): void {
-    const pending = this.#pendingUnavailableRecoveries.get(deliveryKey);
+  #resolveMessageRecovery(deliveryKey: string, key: ZapoMessageKeyLike): void {
+    const pending = this.#pendingMessageRecoveries.get(deliveryKey);
     if (!pending) return;
     clearTimeout(pending.timer);
-    this.#pendingUnavailableRecoveries.delete(deliveryKey);
+    this.#pendingMessageRecoveries.delete(deliveryKey);
     this.#recoveredMessages += 1;
     const recoveredAt = new Date();
     const participantId = key.participant ?? key.participantAlt ?? pending.participantId;
@@ -1372,15 +1378,75 @@ export class ZapoProvider implements WhatsAppProvider {
       payload: {
         recoveredAt,
         recoveryMs: recoveredAt.getTime() - pending.requestedAt,
+        source: pending.source,
+        ...(pending.originalFailure ? { originalFailure: pending.originalFailure } : {}),
         ...(key.id ? { messageId: key.id } : pending.messageId ? { messageId: pending.messageId } : {}),
         ...(key.remoteJid ? { chatId: key.remoteJid } : pending.chatId ? { chatId: pending.chatId } : {}),
         ...(participantId ? { participantId } : {}),
       },
     });
-    this.#logger.info('Recovered unavailable message from the primary device.', {
+    this.#logger.info('Recovered encrypted message content.', {
       ...(key.id ? { messageId: key.id } : {}),
       ...(key.remoteJid ? { chatId: key.remoteJid } : {}),
       recoveryMs: recoveredAt.getTime() - pending.requestedAt,
+      source: pending.source,
+    });
+  }
+
+  #trackDecryptRecovery(
+    kind: CryptoDegradationKind,
+    context: Readonly<Record<string, unknown>>,
+    ingressMetadata: IngressCryptoMetadata,
+  ): void {
+    const messageId = stringValue(context.id);
+    const chatId = normalizeIngressJid(
+      stringValue(context.from) ?? stringValue(context.groupJid),
+    );
+    if (!messageId || !chatId) return;
+
+    const deliveryKey = this.#messageDeliveryKey({ id: messageId, remoteJid: chatId });
+    const previous = this.#pendingMessageRecoveries.get(deliveryKey);
+    if (previous?.source === 'primary_device_resend') return;
+    if (previous) clearTimeout(previous.timer);
+
+    const requestedAt = Date.now();
+    const participantId = ingressMetadata.participantId
+      ?? normalizeIngressJid(stringValue(context.participant));
+    const timer = setTimeout(() => {
+      const pending = this.#pendingMessageRecoveries.get(deliveryKey);
+      if (!pending || pending.requestedAt !== requestedAt) return;
+      this.#pendingMessageRecoveries.delete(deliveryKey);
+      this.#recoveryFailedMessages += 1;
+      this.#markDegraded();
+      const failedAt = new Date();
+      this.#emitStability({
+        type: 'messageRecoveryFailed',
+        payload: {
+          failedAt,
+          waitedMs: failedAt.getTime() - pending.requestedAt,
+          source: pending.source,
+          ...(pending.originalFailure ? { originalFailure: pending.originalFailure } : {}),
+          ...(pending.messageId ? { messageId: pending.messageId } : {}),
+          ...(pending.chatId ? { chatId: pending.chatId } : {}),
+          ...(pending.participantId ? { participantId: pending.participantId } : {}),
+        },
+      });
+      this.#logger.warn('Encrypted message recovery did not arrive in time.', {
+        messageId: pending.messageId,
+        chatId: pending.chatId,
+        waitedMs: failedAt.getTime() - pending.requestedAt,
+        source: pending.source,
+      });
+    }, MESSAGE_RECOVERY_TIMEOUT_MS);
+
+    this.#pendingMessageRecoveries.set(deliveryKey, {
+      requestedAt,
+      timer,
+      source: 'sender_retry',
+      originalFailure: kind,
+      messageId,
+      chatId,
+      ...(participantId ? { participantId } : {}),
     });
   }
 
@@ -1831,6 +1897,7 @@ export class ZapoProvider implements WhatsAppProvider {
         : 'decrypt_failure';
       if (kind === 'sender_key_mismatch') this.#senderKeyMismatches += 1;
       this.#markDegraded();
+      this.#trackDecryptRecovery(kind, context, ingressMetadata);
       this.#emitCryptoDegraded(kind, context, ingressMetadata);
       return;
     }
@@ -1863,7 +1930,6 @@ export class ZapoProvider implements WhatsAppProvider {
         ...(participantId ? { participantId } : {}),
         ...(encType ? { encType } : {}),
         ...(decryptFail ? { decryptFail } : {}),
-        ...(decryptFail === 'hide' ? { isStealth: true as const } : {}),
       },
     });
   }

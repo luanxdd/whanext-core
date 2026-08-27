@@ -130,8 +130,9 @@ export interface CryptoDegradedEvent {
   /** Raw safe metadata from the `<enc decrypt-fail="...">` envelope. */
   decryptFail?: string;
   /**
-   * High-confidence signal that the sender intentionally asked clients to hide
-   * a payload that selected recipients could not decrypt.
+   * @deprecated This field is retained for source compatibility only. Since
+   * 0.19.25 the Core never sets it because transport metadata does not prove
+   * the decrypted message type or malicious intent.
    */
   isStealth?: true;
 }
@@ -148,6 +149,8 @@ export interface MessageUnavailableEvent {
 export interface MessageRecoveredEvent {
   recoveredAt: Date;
   recoveryMs: number;
+  source?: 'sender_retry' | 'primary_device_resend';
+  originalFailure?: CryptoDegradationKind;
   messageId?: string;
   chatId?: string;
   participantId?: string;
@@ -156,6 +159,8 @@ export interface MessageRecoveredEvent {
 export interface MessageRecoveryFailedEvent {
   failedAt: Date;
   waitedMs: number;
+  source?: 'sender_retry' | 'primary_device_resend';
+  originalFailure?: CryptoDegradationKind;
   messageId?: string;
   chatId?: string;
   participantId?: string;

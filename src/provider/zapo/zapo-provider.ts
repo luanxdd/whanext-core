@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { mkdir, stat } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { Readable } from 'node:stream';
@@ -12,6 +12,7 @@ import {
   proto,
   type Logger as ZapoLogger,
   type LogLevel as ZapoLogLevel,
+  type BinaryNode,
   type Proto,
   type WaIncomingDecryptedPayloadEvent,
   type WaIncomingMessageEvent,
@@ -2359,9 +2360,39 @@ export class ZapoProvider implements WhatsAppProvider {
       messageContextInfo: { messageSecret },
       interactiveMessage,
     };
+    const customNodes: readonly BinaryNode[] = [{
+      tag: 'biz',
+      attrs: {
+        actual_actors: '2',
+        host_storage: '2',
+        privacy_mode_ts: String(Math.floor(Date.now() / 1_000)),
+      },
+      content: [
+        {
+          tag: 'interactive',
+          attrs: { type: 'native_flow', v: '1' },
+          content: [{
+            tag: 'native_flow',
+            attrs: { v: '9', name: 'mixed' },
+          }],
+        },
+        {
+          tag: 'quality_control',
+          attrs: {
+            decision_id: randomUUID().replaceAll('-', ''),
+            source_type: 'third_party',
+          },
+          content: [{
+            tag: 'decision_source',
+            attrs: { value: 'df' },
+          }],
+        },
+      ],
+    }];
     const result = await this.#requireClient().message.send(chatId, raw, {
       ...(replyTo ? { quote: this.#toZapoKey(replyTo) } : {}),
       ...(mentions.length > 0 ? { mentions } : {}),
+      customNodes,
       messageSecret,
     });
 

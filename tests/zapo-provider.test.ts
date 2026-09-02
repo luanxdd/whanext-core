@@ -1061,6 +1061,19 @@ describe('ZapoProvider', () => {
     });
     expect(message.messageContextInfo.messageSecret).toHaveLength(32);
     expect(options.messageSecret).toEqual(message.messageContextInfo.messageSecret);
+    expect(options.customNodes).toEqual([
+      expect.objectContaining({
+        tag: 'biz',
+        attrs: expect.objectContaining({
+          actual_actors: '2',
+          host_storage: '2',
+        }),
+        content: expect.arrayContaining([
+          expect.objectContaining({ tag: 'interactive' }),
+          expect.objectContaining({ tag: 'quality_control' }),
+        ]),
+      }),
+    ]);
     expect(payload.createSurface).toMatchObject({ surfaceId: 'music-player' });
     expect(payload.createSurface.components).toEqual(expect.arrayContaining([
       expect.objectContaining({ component: 'AudioPlayer' }),

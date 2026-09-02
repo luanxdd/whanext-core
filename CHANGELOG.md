@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.20.1
+
+### Canvas interativo
+- Corrigido o envio A2UI para anexar os nós binários `biz/interactive` e `quality_control` exigidos pelo fluxo misto do WhatsApp. Sem esses nós, clientes compatíveis exibiam apenas o `fallback` do widget.
+
 ## 0.20.0
 
 ### Canvas interativo

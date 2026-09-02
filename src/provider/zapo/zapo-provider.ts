@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import { mkdir, stat } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { Readable } from 'node:stream';
@@ -31,6 +32,7 @@ import type {
 import { uniqueIdentities } from '@/models/identity.js';
 import type {
   ButtonsContent,
+  CanvasContent,
   DownloadedMedia,
   EditMessageOptions,
   ListContent,
@@ -560,6 +562,10 @@ export class ZapoProvider implements WhatsAppProvider {
     replyTo?: MessageKey,
   ): Promise<SentMessage> {
     return this.#trackOutgoing(async () => {
+      if ('canvas' in content) {
+        return this.#sendCanvas(chatId, content, replyTo);
+      }
+
       if ('buttons' in content) {
         return this.#sendButtons(chatId, content, replyTo);
       }
@@ -2296,7 +2302,75 @@ export class ZapoProvider implements WhatsAppProvider {
     return this.#sent(result, chatId);
   }
 
-  async #toContent(content: MessageContent): Promise<{
+  async #sendCanvas(
+    chatId: string,
+    content: CanvasContent,
+    replyTo?: MessageKey,
+  ): Promise<SentMessage> {
+    this.#validateCanvas(content);
+    const mentions = content.mentions ? this.#mentions(content.mentions) : [];
+    const messageSecret = randomBytes(32);
+    const widget = content.canvas.build(content.fallback);
+    const nativeFlowMessage = {
+      buttons: (content.buttons ?? []).map((button) => {
+        if (button.type === 'copy') {
+          return {
+            name: 'cta_copy',
+            buttonParamsJson: JSON.stringify({
+              display_text: button.label,
+              copy_code: button.code,
+            }),
+          };
+        }
+
+        if (button.type === 'reply') {
+          return {
+            name: 'quick_reply',
+            buttonParamsJson: JSON.stringify({
+              display_text: button.label,
+              id: button.id,
+            }),
+          };
+        }
+
+        return {
+          name: 'cta_url',
+          buttonParamsJson: JSON.stringify({
+            display_text: button.label,
+            url: button.url,
+            merchant_url: button.url,
+          }),
+        };
+      }),
+      messageParamsJson: content.buttons?.length ? '{}' : '',
+      messageVersion: 1,
+    };
+    const interactiveMessage: NonNullable<Proto.IMessage['interactiveMessage']> = {
+      ...(!content.singleScreen ? {
+        header: { hasMediaAttachment: false },
+        ...(content.text !== undefined ? { body: { text: content.text } } : {}),
+        ...(content.footer !== undefined ? { footer: { text: content.footer } } : {}),
+      } : {}),
+      ...(mentions.length > 0 ? { contextInfo: { mentionedJid: mentions } } : {}),
+      nativeFlowMessage,
+      bloksWidget: widget,
+    };
+    const raw: Proto.IMessage = {
+      messageContextInfo: { messageSecret },
+      interactiveMessage,
+    };
+    const result = await this.#requireClient().message.send(chatId, raw, {
+      ...(replyTo ? { quote: this.#toZapoKey(replyTo) } : {}),
+      ...(mentions.length > 0 ? { mentions } : {}),
+      messageSecret,
+    });
+
+    return this.#sent(result, chatId);
+  }
+
+  async #toContent(
+    content: Exclude<MessageContent, ButtonsContent | CanvasContent | ListContent>,
+  ): Promise<{
     value: unknown;
     mentions: string[];
     viewOnce?: boolean;
@@ -2382,6 +2456,27 @@ export class ZapoProvider implements WhatsAppProvider {
       }
       if (button.type === 'link' && !button.url.trim()) {
         throw new WhaNextError('ARGUMENT_INVALID', 'Link buttons require a non-empty URL.');
+      }
+    }
+  }
+
+  #validateCanvas(content: CanvasContent): void {
+    if (!content.fallback.trim()) {
+      throw new WhaNextError('ARGUMENT_INVALID', 'Canvas fallback text cannot be empty.');
+    }
+
+    for (const button of content.buttons ?? []) {
+      if (!button.label.trim()) {
+        throw new WhaNextError('ARGUMENT_INVALID', 'Canvas button labels cannot be empty.');
+      }
+      if (button.type === 'reply' && !button.id.trim()) {
+        throw new WhaNextError('ARGUMENT_INVALID', 'Canvas reply button IDs cannot be empty.');
+      }
+      if (button.type === 'copy' && !button.code) {
+        throw new WhaNextError('ARGUMENT_INVALID', 'Canvas copy buttons require a code.');
+      }
+      if (button.type === 'link' && !button.url.trim()) {
+        throw new WhaNextError('ARGUMENT_INVALID', 'Canvas link buttons require a URL.');
       }
     }
   }

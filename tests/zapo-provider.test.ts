@@ -6,6 +6,7 @@ import {
   vi,
 } from 'vitest';
 import { Browser } from '@/auth/browser.js';
+import { A2UICanvas } from '@/canvas/a2ui.js';
 import type { Message } from '@/models/message.js';
 import type {
   CryptoDegradedEvent,
@@ -1020,6 +1021,50 @@ describe('ZapoProvider', () => {
       },
       {},
     );
+  });
+
+  it('sends A2UI canvases as bloks widgets with a message secret and fallback', async () => {
+    const { provider, client: current } = await connectedProvider();
+    const canvas = new A2UICanvas({ surfaceId: 'music-player' });
+    const player = canvas.audio('https://cdn.example.com/song.m4a', {
+      description: 'Starboy — The Weeknd',
+    });
+    canvas.root([canvas.card(player)]);
+
+    await provider.sendMessage('123@g.us', {
+      canvas,
+      fallback: '🎵 Starboy — The Weeknd',
+      text: 'Player interativo',
+      footer: 'WhaNext Music',
+      buttons: [{ type: 'reply', label: 'Próxima', id: ';next' }],
+    });
+
+    const sent = current.sent[0];
+    const message = sent?.content as any;
+    const options = sent?.options as any;
+    const widget = message.interactiveMessage.bloksWidget;
+    const payload = JSON.parse(widget.data);
+
+    expect(message).toMatchObject({
+      messageContextInfo: { messageSecret: expect.any(Uint8Array) },
+      interactiveMessage: {
+        body: { text: 'Player interativo' },
+        footer: { text: 'WhaNext Music' },
+        nativeFlowMessage: {
+          buttons: [expect.objectContaining({ name: 'quick_reply' })],
+        },
+        bloksWidget: {
+          type: 'im_a2ui',
+          fallback: '🎵 Starboy — The Weeknd',
+        },
+      },
+    });
+    expect(message.messageContextInfo.messageSecret).toHaveLength(32);
+    expect(options.messageSecret).toEqual(message.messageContextInfo.messageSecret);
+    expect(payload.createSurface).toMatchObject({ surfaceId: 'music-player' });
+    expect(payload.createSurface.components).toEqual(expect.arrayContaining([
+      expect.objectContaining({ component: 'AudioPlayer' }),
+    ]));
   });
 
   it('rejects invalid interactive payloads before sending them', async () => {

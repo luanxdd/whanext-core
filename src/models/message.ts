@@ -1,4 +1,5 @@
 import type { User } from '@/models/user.js';
+import type { A2UICanvas } from '@/canvas/a2ui.js';
 
 export interface MessageKey {
   id: string;
@@ -225,6 +226,16 @@ export interface ListContent {
   mentions?: MentionTarget[];
 }
 
+export interface CanvasContent {
+  canvas: A2UICanvas;
+  fallback: string;
+  text?: string;
+  footer?: string;
+  buttons?: readonly MessageButton[];
+  mentions?: readonly MentionTarget[];
+  singleScreen?: boolean;
+}
+
 export interface PollContent {
   poll: string;
   options: readonly string[];
@@ -261,6 +272,7 @@ export type MessageContent =
   | TextContent
   | ButtonsContent
   | ListContent
+  | CanvasContent
   | PollContent
   | ImageContent 
   | VideoContent 

@@ -543,6 +543,58 @@ await app.message.unreact(sent);
 
 ### Interativos
 
+#### Canvas A2UI
+
+O WhaNext pode enviar interfaces nativas renderizadas dentro do WhatsApp usando `bloksWidget` e A2UI v0.9. O builder valida IDs, referências, URLs e o tamanho do payload antes do envio:
+
+```ts
+import { A2UICanvas } from '@whanext/core';
+
+const canvas = new A2UICanvas({
+  theme: {
+    primaryColor: '#25D366',
+    agentDisplayName: 'Dyno',
+  },
+});
+
+const title = canvas.text('Olá 👋', { variant: 'h1' });
+const description = canvas.text('Esta interface foi renderizada no WhatsApp.');
+canvas.root([canvas.card(canvas.column([title, description]))]);
+
+await app.message.canvas(chatId, {
+  canvas,
+  fallback: 'Olá! Abra esta mensagem em um WhatsApp compatível.',
+});
+```
+
+Em comandos, o mesmo conteúdo funciona com `ctx.reply(...)`. `text`, `footer`, `mentions`, `singleScreen` e botões Native Flow são opcionais.
+
+Um player musical completo pode ser criado com o helper `musicPlayer()`:
+
+```ts
+import { musicPlayer } from '@whanext/core';
+
+const player = musicPlayer({
+  title: 'Starboy',
+  artist: 'The Weeknd',
+  album: 'Starboy',
+  coverUrl: result.artwork,
+  audioUrl: result.download.url,
+  lyrics: result.lyrics?.lines?.map((line) => ({
+    timeMs: line.timeMs,
+    text: line.text,
+  })),
+});
+
+await ctx.reply({
+  canvas: player,
+  fallback: '🎵 Starboy — The Weeknd',
+  footer: 'Dyno Music',
+});
+```
+
+O componente `AudioPlayer` reproduz uma URL remota. Letras timestamped são exibidas com seus tempos; a sincronização visual automática depende dos recursos liberados pelo renderer do WhatsApp no aparelho.
+
 #### Botões
 
 A API pública suporta botões de **copiar**, **abrir link** e **resposta rápida com ID**:

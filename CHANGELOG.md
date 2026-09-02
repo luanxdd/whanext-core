@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.20.0
+
+### Canvas interativo
+- Adicionado `A2UICanvas`, um builder tipado para superfícies A2UI v0.9 com texto, imagem, vídeo, player de áudio, botões, cards, divisores e layouts em linha, coluna ou lista.
+- Adicionado `CanvasContent` e `MessageService.canvas()`; canvases também podem ser usados diretamente em `send()`, `reply()` e `ctx.reply()`.
+- O provider Zapo envia o canvas em `interactiveMessage.bloksWidget` com `type: "im_a2ui"`, segredo aleatório de 32 bytes e Native Flow auxiliar, sem expor o protobuf na API pública.
+- Clientes sem suporte recebem o texto definido em `fallback` pelo próprio widget.
+
+### Música
+- Adicionado `musicPlayer()` para criar um player com capa, título, artista, álbum, áudio remoto e letra simples ou timestamped.
+- Linhas sincronizadas são formatadas com timestamps; o destaque automático durante a reprodução continua dependente do renderer do WhatsApp.
+
+### Segurança e compatibilidade
+- Componentes possuem IDs únicos, referências são verificadas antes do envio e URLs de mídia aceitam somente HTTP/HTTPS.
+- Payloads são limitados a 200 componentes e 256 KiB.
+- Atualizado `zapo-js` para 1.8.2.
+
 ## 0.19.25
 
 ### Segurança

@@ -1,5 +1,6 @@
 import type {
   ButtonsContent,
+  CanvasContent,
   EditMessageOptions,
   ListContent,
   MentionTarget,
@@ -81,6 +82,10 @@ export class MessageService {
   }
 
   list(chatId: string, content: ListContent): Promise<SentMessage> {
+    return this.send(chatId, content);
+  }
+
+  canvas(chatId: string, content: CanvasContent): Promise<SentMessage> {
     return this.send(chatId, content);
   }
 

@@ -27,28 +27,6 @@ export {
 } from '@/app/whanext-app.js';
 export { Browser } from '@/auth/browser.js';
 export {
-  A2UI_BASIC_CATALOG,
-  A2UICanvas,
-  type A2UIAction,
-  type A2UIAlign,
-  type A2UICanvasOptions,
-  type A2UIComponent,
-  type A2UIFit,
-  type A2UIFunctionCall,
-  type A2UIImageVariant,
-  type A2UIJustify,
-  type A2UITextVariant,
-  type A2UITheme,
-  type A2UIValue,
-  type A2UIVersion,
-  type A2UIWidget,
-} from '@/canvas/a2ui.js';
-export {
-  musicPlayer,
-  type MusicLyricLine,
-  type MusicPlayerOptions,
-} from '@/canvas/music-player.js';
-export {
   MemoryCache,
   type MemoryCacheStats,
 } from '@/cache/memory-cache.js';
@@ -161,7 +139,6 @@ export type {
 export type {
   AudioContent,
   ButtonsContent,
-  CanvasContent,
   CopyCodeButton,
   InteractiveResponse,
   InteractiveResponseKind,

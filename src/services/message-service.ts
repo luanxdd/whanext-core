@@ -1,6 +1,5 @@
 import type {
   ButtonsContent,
-  CanvasContent,
   EditMessageOptions,
   ListContent,
   MentionTarget,
@@ -85,9 +84,6 @@ export class MessageService {
     return this.send(chatId, content);
   }
 
-  canvas(chatId: string, content: CanvasContent): Promise<SentMessage> {
-    return this.send(chatId, content);
-  }
 
   poll(chatId: string, content: PollContent): Promise<SentMessage> {
     return this.send(chatId, content);

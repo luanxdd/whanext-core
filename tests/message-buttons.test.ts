@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
 import { MessageService } from '@/services/message-service.js';
-import { A2UICanvas } from '@/canvas/a2ui.js';
 import { FakeProvider } from './fake-provider.js';
 
 describe('interactive messages', () => {
@@ -61,16 +60,5 @@ describe('interactive messages', () => {
     expect(provider.sent[1]).toEqual({ chatId: '123@g.us', content: poll });
   });
 
-  it('delegates A2UI canvas messages to the provider', async () => {
-    const provider = new FakeProvider();
-    const service = new MessageService(provider);
-    const canvas = new A2UICanvas();
-    canvas.root([canvas.text('Player')]);
-    const content = { canvas, fallback: 'Player de música' };
-
-    await service.canvas('123@g.us', content);
-
-    expect(provider.sent[0]).toEqual({ chatId: '123@g.us', content });
-  });
 
 });

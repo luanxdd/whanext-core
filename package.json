@@ -1,7 +1,7 @@
 {
   "name": "@whanext/core",
-  "version": "0.20.1",
-  "description": "A modern, high-level WhatsApp SDK for TypeScript with commands, groups, media, moderation and structured logging.",
+  "version": "0.21.0",
+  "description": "SDK moderna e de alto nível para bots WhatsApp em TypeScript, com comandos, grupos, mídia, moderação e recursos experimentais isolados.",
   "type": "module",
   "sideEffects": false,
   "main": "./dist/index.js",
@@ -12,10 +12,15 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     },
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./experimental": {
+      "types": "./dist/experimental/index.d.ts",
+      "import": "./dist/experimental/index.js"
+    }
   },
   "files": [
     "dist",
+    "experimental",
     "README.md",
     "CHANGELOG.md",
     "MIGRATING_TO_ZAPO.md",

@@ -33,7 +33,6 @@ import type {
 import { uniqueIdentities } from '@/models/identity.js';
 import type {
   ButtonsContent,
-  CanvasContent,
   DownloadedMedia,
   EditMessageOptions,
   ListContent,
@@ -46,6 +45,8 @@ import type {
   RepostMessageOptions,
   SentMessage,
 } from '@/models/message.js';
+import { isExperimentalContent } from '@/experimental/protocol.js';
+import type { ExperimentalContent } from '@/experimental/types.js';
 import { TypedEventEmitter } from '@/provider/event-emitter.js';
 import type {
   ConnectionState,
@@ -563,8 +564,8 @@ export class ZapoProvider implements WhatsAppProvider {
     replyTo?: MessageKey,
   ): Promise<SentMessage> {
     return this.#trackOutgoing(async () => {
-      if ('canvas' in content) {
-        return this.#sendCanvas(chatId, content, replyTo);
+      if (isExperimentalContent(content)) {
+        return this.#sendExperimental(chatId, content, replyTo);
       }
 
       if ('buttons' in content) {
@@ -2303,104 +2304,56 @@ export class ZapoProvider implements WhatsAppProvider {
     return this.#sent(result, chatId);
   }
 
-  async #sendCanvas(
+  async #sendExperimental(
     chatId: string,
-    content: CanvasContent,
+    content: ExperimentalContent,
     replyTo?: MessageKey,
   ): Promise<SentMessage> {
-    this.#validateCanvas(content);
-    const mentions = content.mentions ? this.#mentions(content.mentions) : [];
-    const messageSecret = randomBytes(32);
-    const widget = content.canvas.build(content.fallback);
-    const nativeFlowMessage = {
-      buttons: (content.buttons ?? []).map((button) => {
-        if (button.type === 'copy') {
-          return {
-            name: 'cta_copy',
-            buttonParamsJson: JSON.stringify({
-              display_text: button.label,
-              copy_code: button.code,
-            }),
-          };
-        }
-
-        if (button.type === 'reply') {
-          return {
-            name: 'quick_reply',
-            buttonParamsJson: JSON.stringify({
-              display_text: button.label,
-              id: button.id,
-            }),
-          };
-        }
-
-        return {
-          name: 'cta_url',
-          buttonParamsJson: JSON.stringify({
-            display_text: button.label,
-            url: button.url,
-            merchant_url: button.url,
-          }),
-        };
-      }),
-      messageParamsJson: content.buttons?.length ? '{}' : '',
-      messageVersion: 1,
-    };
-    const interactiveMessage: NonNullable<Proto.IMessage['interactiveMessage']> = {
-      ...(!content.singleScreen ? {
-        header: { hasMediaAttachment: false },
-        ...(content.text !== undefined ? { body: { text: content.text } } : {}),
-        ...(content.footer !== undefined ? { footer: { text: content.footer } } : {}),
-      } : {}),
-      ...(mentions.length > 0 ? { contextInfo: { mentionedJid: mentions } } : {}),
-      nativeFlowMessage,
-      bloksWidget: widget,
-    };
-    const raw: Proto.IMessage = {
-      messageContextInfo: { messageSecret },
-      interactiveMessage,
-    };
-    const customNodes: readonly BinaryNode[] = [{
-      tag: 'biz',
-      attrs: {
-        actual_actors: '2',
-        host_storage: '2',
-        privacy_mode_ts: String(Math.floor(Date.now() / 1_000)),
+    const responseId = content.response.id?.trim() || randomUUID();
+    const unified = content.response.unified && typeof content.response.unified === 'object'
+      ? { response_id: responseId, ...(content.response.unified as Record<string, unknown>) }
+      : { response_id: responseId, value: content.response.unified };
+    const raw = {
+      messageContextInfo: {
+        deviceListMetadata: {},
+        deviceListMetadataVersion: 2,
+        botMetadata: {
+          messageDisclaimerText: content.response.disclaimer ?? '',
+          botResponseId: responseId,
+        },
       },
-      content: [
-        {
-          tag: 'interactive',
-          attrs: { type: 'native_flow', v: '1' },
-          content: [{
-            tag: 'native_flow',
-            attrs: { v: '9', name: 'mixed' },
-          }],
-        },
-        {
-          tag: 'quality_control',
-          attrs: {
-            decision_id: randomUUID().replaceAll('-', ''),
-            source_type: 'third_party',
+      botForwardedMessage: {
+        message: {
+          richResponseMessage: {
+            messageType: 1,
+            submessages: (content.response.submessages ?? []).map((messageText) => ({
+              messageType: 2,
+              messageText,
+            })),
+            unifiedResponse: {
+              data: Buffer.from(JSON.stringify(unified), 'utf8').toString('base64'),
+            },
+            contextInfo: {
+              forwardingScore: 1,
+              isForwarded: true,
+              forwardedAiBotMessageInfo: {
+                botJid: content.response.botJid ?? '867051314767696@bot',
+              },
+              forwardOrigin: 4,
+            },
           },
-          content: [{
-            tag: 'decision_source',
-            attrs: { value: 'df' },
-          }],
         },
-      ],
-    }];
+      },
+    } as unknown as Proto.IMessage;
     const result = await this.#requireClient().message.send(chatId, raw, {
       ...(replyTo ? { quote: this.#toZapoKey(replyTo) } : {}),
-      ...(mentions.length > 0 ? { mentions } : {}),
-      customNodes,
-      messageSecret,
     });
-
     return this.#sent(result, chatId);
   }
 
   async #toContent(
-    content: Exclude<MessageContent, ButtonsContent | CanvasContent | ListContent>,
+
+    content: Exclude<MessageContent, ButtonsContent | ListContent>,
   ): Promise<{
     value: unknown;
     mentions: string[];
@@ -2487,27 +2440,6 @@ export class ZapoProvider implements WhatsAppProvider {
       }
       if (button.type === 'link' && !button.url.trim()) {
         throw new WhaNextError('ARGUMENT_INVALID', 'Link buttons require a non-empty URL.');
-      }
-    }
-  }
-
-  #validateCanvas(content: CanvasContent): void {
-    if (!content.fallback.trim()) {
-      throw new WhaNextError('ARGUMENT_INVALID', 'Canvas fallback text cannot be empty.');
-    }
-
-    for (const button of content.buttons ?? []) {
-      if (!button.label.trim()) {
-        throw new WhaNextError('ARGUMENT_INVALID', 'Canvas button labels cannot be empty.');
-      }
-      if (button.type === 'reply' && !button.id.trim()) {
-        throw new WhaNextError('ARGUMENT_INVALID', 'Canvas reply button IDs cannot be empty.');
-      }
-      if (button.type === 'copy' && !button.code) {
-        throw new WhaNextError('ARGUMENT_INVALID', 'Canvas copy buttons require a code.');
-      }
-      if (button.type === 'link' && !button.url.trim()) {
-        throw new WhaNextError('ARGUMENT_INVALID', 'Canvas link buttons require a URL.');
       }
     }
   }

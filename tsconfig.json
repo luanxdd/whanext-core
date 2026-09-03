@@ -25,6 +25,9 @@
       ],
       "@whanext/core": [
         "./src/index.ts"
+      ],
+      "@whanext/core/experimental": [
+        "./src/experimental/index.ts"
       ]
     },
     "types": [

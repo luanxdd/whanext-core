@@ -1,6 +1,6 @@
 {
   "name": "@whanext/core",
-  "version": "0.21.1",
+  "version": "0.21.2",
   "description": "SDK moderna e de alto nível para bots WhatsApp em TypeScript, com comandos, grupos, mídia, moderação e recursos experimentais isolados.",
   "type": "module",
   "sideEffects": false,

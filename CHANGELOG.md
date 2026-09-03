@@ -1,3 +1,10 @@
+## 0.21.2
+
+### Respostas experimentais
+- Corrigido o identificador de Rich Responses: `response.id` volta a ser tratado como prefixo e cada envio recebe um `responseId` único com timestamp e UUID.
+- Removido o override incorreto do stanza ID introduzido na 0.21.1; o Zapo volta a gerar o ID de transporte normalmente, como no fluxo Rich HTML funcional da série 0.20.x.
+- `replyExperimental()` volta a preservar o contexto de resposta sem reutilizar identificadores fixos.
+
 # Changelog
 
 ## 0.21.1

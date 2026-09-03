@@ -2309,10 +2309,11 @@ export class ZapoProvider implements WhatsAppProvider {
     content: ExperimentalContent,
     replyTo?: MessageKey,
   ): Promise<SentMessage> {
-    const responseId = content.response.id?.trim() || randomUUID();
+    const responsePrefix = content.response.id?.trim() || 'whanext-experimental';
+    const responseId = `${responsePrefix}-${Date.now()}-${randomUUID().slice(0, 8)}`;
     const unified = content.response.unified && typeof content.response.unified === 'object'
-      ? { response_id: responseId, ...(content.response.unified as Record<string, unknown>) }
-      : { response_id: responseId, value: content.response.unified };
+      ? { ...(content.response.unified as Record<string, unknown>), response_id: responseId }
+      : { value: content.response.unified, response_id: responseId };
     const raw = {
       messageContextInfo: {
         deviceListMetadata: {},
@@ -2345,14 +2346,13 @@ export class ZapoProvider implements WhatsAppProvider {
         },
       },
     } as unknown as Proto.IMessage;
-    // Rich Responses correlate their botResponseId/unified response_id with the
-    // actual outgoing stanza id. Keep all three identifiers identical.
-    // Do not inject a quote into this experimental wrapper: unlike regular
-    // messages, the GenAI rich-response envelope is sent as a standalone bot
-    // response and some clients silently discard it when context is rewritten.
-    void replyTo;
+    // `response.id` is a prefix, never the final response identifier. Every
+    // rich response must receive a fresh responseId; reusing a fixed id causes
+    // WhatsApp clients/transport to silently discard subsequent envelopes.
+    // Keep the normal Zapo-generated stanza id, matching the working 0.20.x
+    // Rich HTML transport, and preserve reply context when requested.
     const result = await this.#requireClient().message.send(chatId, raw, {
-      id: responseId,
+      ...(replyTo ? { quote: this.#toZapoKey(replyTo) } : {}),
     });
     return this.#sent(result, chatId);
   }

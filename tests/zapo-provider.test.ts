@@ -2168,6 +2168,32 @@ describe('ZapoProvider', () => {
       payload: '<main>ok</main>',
       trusted_sources: [],
     });
+    expect(unified.response_id).toMatch(/^whanext-experimental-\d+-[0-9a-f-]{8}$/i);
+    expect(message.messageContextInfo.botMetadata.botResponseId).toBe(unified.response_id);
+    expect(sent?.options).not.toMatchObject({ id: expect.anything() });
+  });
+
+  it('gera um responseId novo a cada Rich Response mesmo com prefixo fixo', async () => {
+    const { provider, client: current } = await connectedProvider();
+    const content = richHtml({
+      id: 'dyno-ping',
+      title: 'Ping',
+      html: '<main>pong</main>',
+      trustedSources: [],
+    });
+
+    await provider.sendMessage('123@g.us', content as never);
+    await provider.sendMessage('123@g.us', content as never);
+
+    const ids = current.sent.map((sent) => {
+      const message = sent.content as any;
+      const encoded = message.botForwardedMessage.message.richResponseMessage.unifiedResponse.data;
+      return JSON.parse(Buffer.from(encoded, 'base64').toString('utf8')).response_id as string;
+    });
+
+    expect(ids[0]).toMatch(/^dyno-ping-\d+-[0-9a-f-]{8}$/i);
+    expect(ids[1]).toMatch(/^dyno-ping-\d+-[0-9a-f-]{8}$/i);
+    expect(ids[0]).not.toBe(ids[1]);
   });
 
   it('maps group events without duplicating the public provider contract', async () => {

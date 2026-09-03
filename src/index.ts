@@ -221,3 +221,5 @@ export type {
   TransportDecodeFailureEvent,
   WhatsAppProvider,
 } from '@/provider/provider.js';
+
+export { ZapoProvider, type ZapoProviderOptions, type RawZapoMessageOptions } from '@/provider/zapo/zapo-provider.js';

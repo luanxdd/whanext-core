@@ -262,6 +262,7 @@ export type MessageContent =
   | TextContent
   | ButtonsContent
   | ListContent
+ 
   | PollContent
   | ImageContent 
   | VideoContent 

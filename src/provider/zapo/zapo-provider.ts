@@ -1,4 +1,4 @@
-import { randomBytes, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { mkdir, stat } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { Readable } from 'node:stream';
@@ -45,8 +45,6 @@ import type {
   RepostMessageOptions,
   SentMessage,
 } from '@/models/message.js';
-import { isExperimentalContent } from '@/experimental/protocol.js';
-import type { ExperimentalContent } from '@/experimental/types.js';
 import { TypedEventEmitter } from '@/provider/event-emitter.js';
 import type {
   ConnectionState,
@@ -84,6 +82,12 @@ export interface ZapoProviderOptions {
     initialDelayMs?: number;
     maxDelayMs?: number;
   };
+}
+
+export interface RawZapoMessageOptions {
+  quote?: MessageKey;
+  mentions?: readonly string[];
+  id?: string;
 }
 
 interface SharedZapoStoreEntry {
@@ -564,10 +568,6 @@ export class ZapoProvider implements WhatsAppProvider {
     replyTo?: MessageKey,
   ): Promise<SentMessage> {
     return this.#trackOutgoing(async () => {
-      if (isExperimentalContent(content)) {
-        return this.#sendExperimental(chatId, content, replyTo);
-      }
-
       if ('buttons' in content) {
         return this.#sendButtons(chatId, content, replyTo);
       }
@@ -582,6 +582,24 @@ export class ZapoProvider implements WhatsAppProvider {
         ...(replyTo ? { quote: this.#toZapoKey(replyTo) } : {}),
         ...(mentions.length > 0 ? { mentions } : {}),
         ...(viewOnce !== undefined ? { viewOnce } : {}),
+      });
+
+      return this.#sent(result, chatId);
+    });
+  }
+
+  async sendRawMessage(
+    chatId: string,
+    raw: Proto.IMessage,
+    options: RawZapoMessageOptions = {},
+  ): Promise<SentMessage> {
+    return this.#trackOutgoing(async () => {
+      const result = await this.#requireClient().message.send(chatId, raw, {
+        ...(options.quote ? { quote: this.#toZapoKey(options.quote) } : {}),
+        ...(options.mentions && options.mentions.length > 0
+          ? { mentions: this.#mentions(options.mentions) }
+          : {}),
+        ...(options.id ? { id: options.id } : {}),
       });
 
       return this.#sent(result, chatId);
@@ -2304,61 +2322,8 @@ export class ZapoProvider implements WhatsAppProvider {
     return this.#sent(result, chatId);
   }
 
-  async #sendExperimental(
-    chatId: string,
-    content: ExperimentalContent,
-    replyTo?: MessageKey,
-  ): Promise<SentMessage> {
-    const responsePrefix = content.response.id?.trim() || 'whanext-experimental';
-    const responseId = `${responsePrefix}-${Date.now()}-${randomUUID().slice(0, 8)}`;
-    const unified = content.response.unified && typeof content.response.unified === 'object'
-      ? { ...(content.response.unified as Record<string, unknown>), response_id: responseId }
-      : { value: content.response.unified, response_id: responseId };
-    const raw = {
-      messageContextInfo: {
-        deviceListMetadata: {},
-        deviceListMetadataVersion: 2,
-        botMetadata: {
-          messageDisclaimerText: content.response.disclaimer ?? '',
-          botResponseId: responseId,
-        },
-      },
-      botForwardedMessage: {
-        message: {
-          richResponseMessage: {
-            messageType: 1,
-            submessages: (content.response.submessages ?? []).map((messageText) => ({
-              messageType: 2,
-              messageText,
-            })),
-            unifiedResponse: {
-              data: Buffer.from(JSON.stringify(unified), 'utf8').toString('base64'),
-            },
-            contextInfo: {
-              forwardingScore: 1,
-              isForwarded: true,
-              forwardedAiBotMessageInfo: {
-                botJid: content.response.botJid ?? '867051314767696@bot',
-              },
-              forwardOrigin: 4,
-            },
-          },
-        },
-      },
-    } as unknown as Proto.IMessage;
-    // `response.id` is a prefix, never the final response identifier. Every
-    // rich response must receive a fresh responseId; reusing a fixed id causes
-    // WhatsApp clients/transport to silently discard subsequent envelopes.
-    // Keep the normal Zapo-generated stanza id, matching the working 0.20.x
-    // Rich HTML transport, and preserve reply context when requested.
-    const result = await this.#requireClient().message.send(chatId, raw, {
-      ...(replyTo ? { quote: this.#toZapoKey(replyTo) } : {}),
-    });
-    return this.#sent(result, chatId);
-  }
 
   async #toContent(
-
     content: Exclude<MessageContent, ButtonsContent | ListContent>,
   ): Promise<{
     value: unknown;
@@ -2449,6 +2414,7 @@ export class ZapoProvider implements WhatsAppProvider {
       }
     }
   }
+
 
   #validateList(content: ListContent): void {
     if (!content.text.trim() || !content.buttonText.trim() || content.list.length === 0) {

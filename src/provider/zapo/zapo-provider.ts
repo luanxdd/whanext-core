@@ -2345,8 +2345,14 @@ export class ZapoProvider implements WhatsAppProvider {
         },
       },
     } as unknown as Proto.IMessage;
+    // Rich Responses correlate their botResponseId/unified response_id with the
+    // actual outgoing stanza id. Keep all three identifiers identical.
+    // Do not inject a quote into this experimental wrapper: unlike regular
+    // messages, the GenAI rich-response envelope is sent as a standalone bot
+    // response and some clients silently discard it when context is rewritten.
+    void replyTo;
     const result = await this.#requireClient().message.send(chatId, raw, {
-      ...(replyTo ? { quote: this.#toZapoKey(replyTo) } : {}),
+      id: responseId,
     });
     return this.#sent(result, chatId);
   }

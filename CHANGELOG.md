@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.21.5
+
+- Comandos agora também são detectados em legendas de imagens, vídeos e documentos (`message.caption`).
+- Mantida a prioridade de respostas interativas e mensagens de texto sobre legendas.
+
 ## 0.21.4
 
 ### Adicionado

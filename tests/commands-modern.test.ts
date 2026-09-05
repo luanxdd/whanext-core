@@ -38,6 +38,33 @@ function makeMessage(text: string, id = `message-${Math.random()}`): Message {
 }
 
 describe('modern commands', () => {
+  it('dispatches commands from media captions', async () => {
+    const provider = new FakeProvider();
+    const app = await create({ provider });
+    const execute = vi.fn();
+
+    app.commands.command(defineCommand({
+      name: 'sticker',
+      aliases: ['s'],
+      description: 'Sticker command.',
+      execute,
+    }));
+
+    const message: Message = {
+      ...makeMessage('', 'caption-command'),
+      caption: '!s',
+      hasMedia: true,
+      contentKind: 'image',
+      media: { kind: 'image', mimetype: 'image/jpeg', viewOnce: false },
+    };
+    delete message.text;
+
+    await app.commands.dispatch(message);
+
+    expect(execute).toHaveBeenCalledOnce();
+    expect(execute.mock.calls[0]?.[0].caption).toBe('!s');
+  });
+
   it('allows owner-only commands only for the connected WhatsApp account', async () => {
     const provider = new FakeProvider();
     const app = await create({ provider });

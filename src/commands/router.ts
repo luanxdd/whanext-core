@@ -253,7 +253,7 @@ export class CommandRouter {
   }
 
   async dispatch(message: Message): Promise<boolean> {
-    const text = (message.interactive?.id ?? message.text)?.trim();
+    const text = message.interactive?.id.trim() || message.text?.trim() || message.caption?.trim();
     if (!text) return false;
 
     const matchedPrefix = this.#matchPrefix(text);

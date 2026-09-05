@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.21.6
+
+- Corrige o envio de pacotes nativos de stickers no provider Zapo.
+- Gera automaticamente o `coverThumbnail` JPEG exigido pelo `zapo-js` a partir do ícone do pacote.
+- Mantém esse detalhe de transporte encapsulado no provider, sem expô-lo na API pública de `StickerPackContent`.
+
 ## 0.21.5
 
 - Comandos agora também são detectados em legendas de imagens, vídeos e documentos (`message.caption`).

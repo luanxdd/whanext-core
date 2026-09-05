@@ -6,6 +6,7 @@ import type { ReadableStream as NodeReadableStream } from 'node:stream/web';
 import { basename, dirname, join, resolve } from 'node:path';
 import { createMediaProcessor } from '@zapo-js/media-utils';
 import { createSqliteStore } from '@zapo-js/store-sqlite';
+import sharp from 'sharp';
 import {
   WaClient,
   createStore,
@@ -2519,7 +2520,33 @@ export class ZapoProvider implements WhatsAppProvider {
         media: await this.#stickerPackMedia(pack.trayIcon),
         fileName: 'tray.webp',
       },
+      coverThumbnail: await this.#stickerPackCover(pack.trayIcon),
     };
+  }
+
+  async #stickerPackCover(source: MediaSource): Promise<Uint8Array> {
+    const media = await this.#stickerPackMedia(source);
+
+    try {
+      const input = typeof media === 'string' ? media : Buffer.from(media);
+      const jpeg = await sharp(input, { failOn: 'none' })
+        .resize(252, 252, { fit: 'cover' })
+        .flatten({ background: '#ffffff' })
+        .jpeg({ quality: 82, progressive: true })
+        .toBuffer();
+
+      if (jpeg.length === 0) {
+        throw new Error('EMPTY_STICKER_PACK_COVER');
+      }
+
+      return new Uint8Array(jpeg);
+    } catch (error) {
+      throw new WhaNextError(
+        'PROVIDER_ERROR',
+        'Could not build the sticker pack cover thumbnail.',
+        { cause: error, recoverable: true },
+      );
+    }
   }
 
   async #stickerPackMedia(source: MediaSource): Promise<string | Uint8Array> {

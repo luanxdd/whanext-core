@@ -894,7 +894,7 @@ describe('ZapoProvider', () => {
     const { provider, client: current } = await connectedProvider();
     const stickerA = new Uint8Array([1, 2, 3]);
     const stickerB = new Uint8Array([4, 5, 6]);
-    const tray = new Uint8Array([7, 8, 9]);
+    const tray = new Uint8Array(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl2U2sAAAAASUVORK5CYII=', 'base64'));
 
     await provider.sendMessage('123@g.us', {
       stickerPack: {
@@ -921,9 +921,14 @@ describe('ZapoProvider', () => {
           { media: stickerB, fileName: 'b.webp', emojis: [], isAnimated: false, mimetype: 'image/webp' },
         ],
         trayIcon: { media: tray, fileName: 'tray.webp' },
+        coverThumbnail: expect.any(Uint8Array),
       },
       options: {},
     });
+
+    const cover = (current.sent[0]?.content as { coverThumbnail?: Uint8Array }).coverThumbnail;
+    expect(cover).toBeInstanceOf(Uint8Array);
+    expect(Buffer.from(cover ?? []).subarray(0, 2).toString('hex')).toBe('ffd8');
   });
 
   it('preserves LID and PN addressing metadata when replying to received group messages', async () => {

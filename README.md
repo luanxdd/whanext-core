@@ -651,6 +651,18 @@ await app.media.sticker(chatId, {
   sticker: { path: './sticker.webp' },
 });
 
+await app.message.send(chatId, {
+  stickerPack: {
+    name: 'Dyno • Luan',
+    publisher: 'Luan',
+    stickers: [
+      { sticker: stickerA, fileName: 'a.webp', emojis: ['🪼'] },
+      { sticker: stickerB, fileName: 'b.webp' },
+    ],
+    trayIcon: trayIconWebp,
+  },
+});
+
 const downloaded = await app.media.download(message);
 
 await writeFile(`./downloads/${downloaded.fileName ?? message.id}`, downloaded.data);

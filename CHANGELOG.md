@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.21.4
+
+### Adicionado
+- `StickerPackContent` e `StickerPackSticker` para envio de pacotes nativos de figurinhas pela API de alto nível.
+- Provider Zapo converte pacotes em `sticker-pack` sem exigir dependência direta de `zapo-js` no bot.
+- Suporte a capa do pacote, metadados de autor/nome, emojis e marcação de figurinhas animadas.
+
+
 
 
 ## 0.19.25

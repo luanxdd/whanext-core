@@ -258,6 +258,23 @@ export interface StickerContent {
   sticker: MediaSource;
 }
 
+export interface StickerPackSticker {
+  sticker: MediaSource;
+  fileName?: string;
+  emojis?: readonly string[];
+  animated?: boolean;
+}
+
+export interface StickerPackContent {
+  stickerPack: {
+    id?: string;
+    name: string;
+    publisher: string;
+    stickers: readonly StickerPackSticker[];
+    trayIcon: MediaSource;
+  };
+}
+
 export type MessageContent = 
   | TextContent
   | ButtonsContent
@@ -267,4 +284,5 @@ export type MessageContent =
   | ImageContent 
   | VideoContent 
   | AudioContent
-  | StickerContent;
+  | StickerContent
+  | StickerPackContent;

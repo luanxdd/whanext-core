@@ -890,6 +890,42 @@ describe('ZapoProvider', () => {
     fetchMock.mockRestore();
   });
 
+  it('sends native sticker packs through the high-level message API', async () => {
+    const { provider, client: current } = await connectedProvider();
+    const stickerA = new Uint8Array([1, 2, 3]);
+    const stickerB = new Uint8Array([4, 5, 6]);
+    const tray = new Uint8Array([7, 8, 9]);
+
+    await provider.sendMessage('123@g.us', {
+      stickerPack: {
+        id: 'dyno-pack',
+        name: 'Dyno • Luan',
+        publisher: 'Luan',
+        stickers: [
+          { sticker: stickerA, fileName: 'a.webp', emojis: ['🪼'] },
+          { sticker: stickerB, fileName: 'b.webp', animated: false },
+        ],
+        trayIcon: tray,
+      },
+    });
+
+    expect(current.sent[0]).toMatchObject({
+      to: '123@g.us',
+      content: {
+        type: 'sticker-pack',
+        stickerPackId: 'dyno-pack',
+        name: 'Dyno • Luan',
+        publisher: 'Luan',
+        stickers: [
+          { media: stickerA, fileName: 'a.webp', emojis: ['🪼'], mimetype: 'image/webp' },
+          { media: stickerB, fileName: 'b.webp', emojis: [], isAnimated: false, mimetype: 'image/webp' },
+        ],
+        trayIcon: { media: tray, fileName: 'tray.webp' },
+      },
+      options: {},
+    });
+  });
+
   it('preserves LID and PN addressing metadata when replying to received group messages', async () => {
     const { provider, client: current } = await connectedProvider();
     const received: any[] = [];

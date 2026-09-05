@@ -168,6 +168,8 @@ export type {
   LinkButton,
   SentMessage,
   StickerContent,
+  StickerPackContent,
+  StickerPackSticker,
   TextContent,
   VideoContent,
 } from '@/models/message.js';

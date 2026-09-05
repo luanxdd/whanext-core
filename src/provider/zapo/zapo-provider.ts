@@ -44,6 +44,7 @@ import type {
   PollContent,
   RepostMessageOptions,
   SentMessage,
+  StickerPackContent,
 } from '@/models/message.js';
 import { TypedEventEmitter } from '@/provider/event-emitter.js';
 import type {
@@ -2380,6 +2381,13 @@ export class ZapoProvider implements WhatsAppProvider {
       };
     }
 
+    if ('stickerPack' in content) {
+      return {
+        value: await this.#stickerPackContent(content),
+        mentions: [],
+      };
+    }
+
     return {
       value: {
         type: 'audio',
@@ -2478,6 +2486,68 @@ export class ZapoProvider implements WhatsAppProvider {
       selectableCount,
       ...(content.allowAddOption !== undefined ? { allowAddOption: content.allowAddOption } : {}),
     };
+  }
+
+
+  async #stickerPackContent(content: StickerPackContent): Promise<unknown> {
+    const pack = content.stickerPack;
+    const name = pack.name.trim();
+    const publisher = pack.publisher.trim();
+
+    if (!name || !publisher || pack.stickers.length < 1 || pack.stickers.length > 30) {
+      throw new WhaNextError(
+        'ARGUMENT_INVALID',
+        'Sticker packs require a name, publisher and between 1 and 30 stickers.',
+      );
+    }
+
+    return {
+      type: 'sticker-pack',
+      stickerPackId: pack.id?.trim() || randomUUID(),
+      name,
+      publisher,
+      stickers: await Promise.all(
+        pack.stickers.map(async (item, index) => ({
+          media: await this.#stickerPackMedia(item.sticker),
+          fileName: item.fileName?.trim() || `sticker-${index + 1}.webp`,
+          emojis: [...(item.emojis ?? [])],
+          ...(item.animated !== undefined ? { isAnimated: item.animated } : {}),
+          mimetype: 'image/webp',
+        })),
+      ),
+      trayIcon: {
+        media: await this.#stickerPackMedia(pack.trayIcon),
+        fileName: 'tray.webp',
+      },
+    };
+  }
+
+  async #stickerPackMedia(source: MediaSource): Promise<string | Uint8Array> {
+    if (source instanceof Uint8Array) return source;
+    if ('path' in source) return source.path;
+
+    let response: Response;
+    try {
+      response = await fetch(source.url, {
+        signal: AbortSignal.timeout(REMOTE_MEDIA_TIMEOUT_MS),
+      });
+    } catch (error) {
+      throw new WhaNextError(
+        'PROVIDER_ERROR',
+        'Could not open the remote sticker source.',
+        { cause: error, recoverable: true },
+      );
+    }
+
+    if (!response.ok) {
+      throw new WhaNextError(
+        'PROVIDER_ERROR',
+        'Could not download the remote sticker source.',
+        { context: { status: response.status }, recoverable: response.status >= 500 },
+      );
+    }
+
+    return new Uint8Array(await response.arrayBuffer());
   }
 
   async #media(source: MediaSource): Promise<string | Uint8Array | Readable> {
